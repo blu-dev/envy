@@ -1,0 +1,11 @@
+[package]
+name = "envy-designer"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bytemuck = "1.23.2"
+eframe = { version = "0.32.1", features = ["wgpu"] }
+egui = "0.32.1"
+egui-wgpu = "0.32.1"
+wgpu = "25"

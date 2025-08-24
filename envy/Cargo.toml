@@ -1,0 +1,14 @@
+[package]
+name = "envy"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bytemuck = { version = "1.23.2", features = ["derive"] }
+camino = "1.1.11"
+glam = { version = "0.30.5", features = ["bytemuck", "serde"] }
+log = "0.4.27"
+serde = { version = "1.0.219", features = ["derive"] }
+
+[features]
+unsend = []

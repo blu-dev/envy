@@ -1,0 +1,2 @@
+[workspace]
+members = ["envy", "envy-designer", "envy-wgpu"]

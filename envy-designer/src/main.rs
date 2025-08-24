@@ -5,9 +5,17 @@ use camino::{Utf8Path, Utf8PathBuf};
 use eframe::{App, NativeOptions};
 use egui::{IconData, Rect, ViewportBuilder};
 use egui_wgpu::CallbackTrait;
-use envy::{ImageNode, NodeDisjointAccessor, NodeItem, NodeTransform};
+use envy::{
+    Animation, AnimationChannel, AnimationTransform, EmptyNode, ImageNode, NodeAnimation,
+    NodeDisjointAccessor, NodeItem, NodeTransform, TransformStep,
+};
 use envy_wgpu::WgpuBackend;
 use glam::Vec2;
+
+use crate::{
+    resource_viewer::{ImageResourceData, ResourceViewer},
+    tree_viewer::ItemTreeCommand,
+};
 
 // use crate::{
 //     tree::{Anchor, EmptyNode, Node, TextNode, TextureNode},
@@ -17,11 +25,13 @@ use glam::Vec2;
 
 // mod file;
 // mod tree;
-// mod tree_viewer;
+mod resource_viewer;
+mod tree_viewer;
 // mod wgpu_backend;
 
 pub struct EnvyDesigner {
     editing_node_path: Option<Utf8PathBuf>,
+    resources: ResourceViewer,
 }
 
 impl EnvyDesigner {
@@ -30,7 +40,42 @@ impl EnvyDesigner {
 
         let wgpu_render_state = ctx.wgpu_render_state.as_ref()?;
 
-        let resources = EnvyResources::new(wgpu_render_state);
+        let mut resources = EnvyResources::new(wgpu_render_state);
+        let image_data = std::fs::read("./icon.png").unwrap();
+        let texture = resources.backend.add_texture("icon", &image_data);
+        let image_data =
+            std::fs::read("/home/blujay/.config/Ryujinx/sdcard/stratus_header.png").unwrap();
+        let texture_2 = resources.backend.add_texture("header", &image_data);
+
+        let view = texture.create_view(&Default::default());
+        let view_2 = texture_2.create_view(&Default::default());
+
+        let texture_id = wgpu_render_state.renderer.write().register_native_texture(
+            &wgpu_render_state.device,
+            &view,
+            wgpu::FilterMode::Linear,
+        );
+        let texture_id_2 = wgpu_render_state.renderer.write().register_native_texture(
+            &wgpu_render_state.device,
+            &view_2,
+            wgpu::FilterMode::Linear,
+        );
+
+        let mut viewer = ResourceViewer::new();
+        viewer.add_image(
+            "icon",
+            ImageResourceData {
+                texture_id,
+                size: egui::Vec2::new(texture.width() as f32, texture.height() as f32),
+            },
+        );
+        viewer.add_image(
+            "header",
+            ImageResourceData {
+                texture_id: texture_id_2,
+                size: egui::Vec2::new(texture_2.width() as f32, texture_2.height() as f32),
+            },
+        );
 
         wgpu_render_state
             .renderer
@@ -40,6 +85,7 @@ impl EnvyDesigner {
 
         Some(Self {
             editing_node_path: None,
+            resources: viewer,
         })
     }
 }
@@ -59,92 +105,101 @@ impl App for EnvyDesigner {
         //     }
         // });
 
-        // egui::SidePanel::left("tree_viewer").show(ctx, |ui| {
-        //     let mut data = frame
-        //         .wgpu_render_state()
-        //         .unwrap()
-        //         .renderer
-        //         .write()
-        //         .callback_resources
-        //         .remove::<EnvyResources>()
-        //         .unwrap();
+        egui::SidePanel::left("tree_viewer").show(ctx, |ui| {
+            let mut data = frame
+                .wgpu_render_state()
+                .unwrap()
+                .renderer
+                .write()
+                .callback_resources
+                .remove::<EnvyResources>()
+                .unwrap();
 
-        //     // let data = res.get::<EnvyResources>().unwrap();
+            let commands = tree_viewer::show_tree_viewer(ui, &data.icons, &data.tree);
+            for command in commands {
+                match command {
+                    ItemTreeCommand::NewItem { parent, new_id: _ } => {
+                        let node = data.tree.get_node_by_path_mut(&parent).unwrap();
 
-        //     let commands = tree_viewer::show_tree_viewer(ui, &data.icons, &data.tree.root_children);
-        //     for command in commands {
-        //         match command {
-        //             ItemTreeCommand::NewItem { parent, new_id: _ } => {
-        //                 let node = data.tree.get_node_by_path_mut(&parent).unwrap();
+                        let mut current_child_test = 0;
+                        loop {
+                            let name = if current_child_test == 0 {
+                                "new_node".to_string()
+                            } else {
+                                format!("new_node_{}", current_child_test + 1)
+                            };
+                            current_child_test += 1;
+                            if node.has_child(&name) {
+                                continue;
+                            }
 
-        //                 let mut current_child_test = 0;
-        //                 loop {
-        //                     let name = if current_child_test == 0 {
-        //                         "new_node".to_string()
-        //                     } else {
-        //                         format!("new_node_{}", current_child_test + 1)
-        //                     };
-        //                     current_child_test += 1;
-        //                     if node.children.iter().any(|child| child.name == name) {
-        //                         continue;
-        //                     }
+                            assert!(node.add_child(NodeItem::new(
+                                name,
+                                NodeTransform::default(),
+                                [255; 4],
+                                EmptyNode,
+                            )));
+                            break;
+                        }
+                    }
+                    ItemTreeCommand::OpenItem(path) => self.editing_node_path = Some(path),
+                    ItemTreeCommand::RenameItem { id, new_name } => {
+                        if data.tree.rename_node(&id, new_name.clone()) {
+                            if self
+                                .editing_node_path
+                                .as_ref()
+                                .is_some_and(|path| *path == id)
+                            {
+                                self.editing_node_path = Some(id.with_file_name(new_name));
+                            }
+                        }
+                    }
+                    ItemTreeCommand::DeleteItem(path) => {
+                        assert!(data.tree.remove_node(&path).is_some());
+                    }
+                    _ => {}
+                }
+            }
+            if ui.button("Add New Root Node").clicked() {
+                let mut current_child_test = 0;
+                loop {
+                    let name = if current_child_test == 0 {
+                        "new_node".to_string()
+                    } else {
+                        format!("new_node_{}", current_child_test + 1)
+                    };
+                    current_child_test += 1;
 
-        //                     node.children.push(Node::new(
-        //                         name,
-        //                         glam::Vec2::ZERO,
-        //                         glam::Vec2::new(30.0, 40.0),
-        //                         EmptyNode,
-        //                     ));
-        //                     break;
-        //                 }
-        //             }
-        //             ItemTreeCommand::OpenItem(path) => self.editing_node_path = Some(path),
-        //             ItemTreeCommand::RenameItem { id, new_name } => {
-        //                 let node = data.tree.get_node_by_path_mut(&id).unwrap();
-        //                 node.name = new_name;
-        //             }
-        //             ItemTreeCommand::DeleteItem(path) => {
-        //                 data.tree.remove_node_by_path(&path);
-        //             }
-        //             _ => {}
-        //         }
-        //     }
-        //     if ui.button("Add New Root Node").clicked() {
-        //         let mut current_child_test = 0;
-        //         loop {
-        //             let name = if current_child_test == 0 {
-        //                 "new_node".to_string()
-        //             } else {
-        //                 format!("new_node_{}", current_child_test + 1)
-        //             };
-        //             current_child_test += 1;
-        //             if data
-        //                 .tree
-        //                 .root_children
-        //                 .iter()
-        //                 .any(|child| child.name == name)
-        //             {
-        //                 continue;
-        //             }
+                    if data.tree.has_root(&name) {
+                        continue;
+                    }
 
-        //             data.tree.root_children.push(Node::new(
-        //                 name,
-        //                 glam::Vec2::ZERO,
-        //                 glam::Vec2::new(30.0, 40.0),
-        //                 EmptyNode,
-        //             ));
-        //             break;
-        //         }
-        //     }
+                    data.tree.add_child(NodeItem::new(
+                        name,
+                        NodeTransform::default(),
+                        [255; 4],
+                        EmptyNode,
+                    ));
+                    break;
+                }
+            }
 
-        //     frame
-        //         .wgpu_render_state()
-        //         .unwrap()
-        //         .renderer
-        //         .write()
-        //         .callback_resources
-        //         .insert(data);
-        // });
+            frame
+                .wgpu_render_state()
+                .unwrap()
+                .renderer
+                .write()
+                .callback_resources
+                .insert(data);
+        });
+
+        egui::SidePanel::right("test").show(ctx, |ui| {
+            self.resources.show(ui);
+            // ui.image(egui::ImageSource::Texture(egui::load::SizedTexture {
+            //     id: self.texture_id,
+            //     size: egui::Vec2::splat(40.0),
+            // }));
+        });
 
         // if let Some(editing_node_path) = self.editing_node_path.as_ref() {
         //     egui::SidePanel::left("node_viewer").show(ctx, |ui| {
@@ -615,6 +670,21 @@ impl EnvyResources {
             state.target_format,
         );
 
+        let animation = Animation {
+            node_animations: vec![NodeAnimation {
+                node_path: Utf8PathBuf::from("test_node"),
+                angle_channel: Some(AnimationChannel {
+                    start: 0.0,
+                    transforms: vec![AnimationTransform {
+                        duration: 240.0,
+                        end: 360.0,
+                        first_step: TransformStep::Linear,
+                        additional_steps: vec![],
+                    }],
+                }),
+            }],
+        };
+
         let mut tree = envy::LayoutTree::new()
             .with_child(
                 NodeItem::new(
@@ -624,14 +694,14 @@ impl EnvyResources {
                     ImageNode::new("icon"),
                 )
                 .with_on_update(|node: NodeDisjointAccessor<'_, WgpuBackend>| {
-                    let mut this = node.self_mut();
-                    this.transform_mut().angle += 1.0;
-                    this.mark_changed();
+                    // let mut this = node.self_mut();
+                    // this.transform_mut().angle += 1.0;
+                    // this.mark_changed();
 
-                    let mut sibling = node.sibling_mut("test_node2").unwrap();
+                    // let mut sibling = node.sibling_mut("test_node2").unwrap();
 
-                    sibling.transform_mut().angle -= 1.0;
-                    sibling.mark_changed();
+                    // sibling.transform_mut().angle -= 1.0;
+                    // sibling.mark_changed();
                 }),
             )
             .with_child(NodeItem::new(
@@ -643,7 +713,10 @@ impl EnvyResources {
 
         backend.load_textures_from_paths([("icon", Utf8Path::new("./icon.png"))]);
 
+        tree.add_animation("test_animation", animation);
         tree.setup(&mut backend);
+
+        tree.play_animation("test_animation");
 
         // let file = file::MenuFile::open("/home/blujay/.config/Ryujinx/sdcard/stratus.envy");
         // backend.load_textures_from_bytes(
@@ -668,6 +741,7 @@ impl EnvyResources {
     }
 
     fn prepare(&mut self) {
+        self.tree.update_animations();
         self.tree.update();
         self.tree.propagate();
         self.tree.prepare(&mut self.backend);

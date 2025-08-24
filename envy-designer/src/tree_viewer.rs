@@ -1,12 +1,13 @@
-use crate::tree::{Node, RenderBackend, TextNode, TextureNode};
-
 use std::hash::Hash;
 
-use camino::Utf8PathBuf;
+use camino::{Utf8Path, Utf8PathBuf};
 use egui::{
     Align2, Color32, CornerRadius, DragAndDrop, FontId, Id, ImageSource, Pos2, Rect, Sense, Stroke,
     Ui, Vec2, WidgetText,
 };
+use envy::{EnvyBackend, ImageNode, LayoutTree, NodeItem, TextNode};
+
+use crate::Icons;
 
 struct ItemTreeNode<T> {
     universal_id: T,
@@ -424,31 +425,32 @@ impl ItemTree {
     }
 }
 
-fn show_children<T: RenderBackend>(
-    children: &[Node<T>],
-    icons: &super::Icons,
-    mut builder: ItemTreeBuilder<Utf8PathBuf>,
-    current_path: Utf8PathBuf,
+fn visit_node<T: EnvyBackend>(
+    node: &NodeItem<T>,
+    icons: &Icons,
+    mut builder: ItemTreeBuilder<'_, Utf8PathBuf>,
+    current_path: &Utf8Path,
 ) {
-    for child in children {
-        let path = current_path.join(&child.name);
-        builder.child(path.clone(), &child.name, move |mut builder| {
-            if child.try_downcast::<TextureNode<T>>().is_some() {
-                builder.set_icon(icons.texture.clone());
-            } else if child.try_downcast::<TextNode<T>>().is_some() {
-                builder.set_icon(icons.text.clone());
-            } else {
-                builder.set_icon(icons.empty.clone());
-            }
-            show_children(&child.children, icons, builder, path);
-        });
+    if node.is::<ImageNode<T>>() {
+        builder.set_icon(icons.texture.clone());
+    } else if node.is::<TextNode<T>>() {
+        builder.set_icon(icons.text.clone());
+    } else {
+        builder.set_icon(icons.empty.clone());
     }
+
+    node.visit_children(move |node| {
+        let path = current_path.join(node.name());
+        builder.child(path.clone(), node.name(), move |builder| {
+            visit_node(node, icons, builder, &path);
+        });
+    });
 }
 
-pub fn show_tree_viewer<T: RenderBackend>(
+pub fn show_tree_viewer<T: EnvyBackend>(
     ui: &mut egui::Ui,
     icons: &super::Icons,
-    nodes: &[Node<T>],
+    tree: &LayoutTree<T>,
 ) -> Vec<ItemTreeCommand<Utf8PathBuf>> {
     let item_tree = ItemTree::new(Id::new("asset_tree"));
 
@@ -458,8 +460,13 @@ pub fn show_tree_viewer<T: RenderBackend>(
         item_tree.show(
             ui,
             || todo!(),
-            |builder| {
-                show_children(nodes, icons, builder, Utf8PathBuf::from(""));
+            |mut builder| {
+                tree.visit_roots(move |node| {
+                    let path = Utf8Path::new(node.name());
+                    builder.child(path.to_path_buf(), node.name(), move |builder| {
+                        visit_node(node, icons, builder, path);
+                    });
+                });
             },
             |id, ui, ui_id| {
                 if ui.button("Remove").clicked() {

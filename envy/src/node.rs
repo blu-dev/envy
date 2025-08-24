@@ -547,6 +547,23 @@ impl<B: EnvyBackend> NodeItem<B> {
         Self::new_boxed(name, transform, color, Box::new(node))
     }
 
+    pub fn name(&self) -> &str {
+        self.name.as_str()
+    }
+
+    pub fn affine(&self) -> &Affine2 {
+        &self.affine
+    }
+
+    pub fn transform(&self) -> &NodeTransform {
+        &self.transform
+    }
+
+    pub fn transform_mut(&mut self) -> &mut NodeTransform {
+        self.was_changed = true;
+        &mut self.transform
+    }
+
     pub fn with_on_update(mut self, callback: impl NodeUpdateCallback<B>) -> Self {
         self.update.push(Box::new(callback));
         self
@@ -556,12 +573,102 @@ impl<B: EnvyBackend> NodeItem<B> {
         self.update.push(Box::new(callback));
     }
 
+    pub fn is<T: Node<B>>(&self) -> bool {
+        self.node.as_any().is::<T>()
+    }
+
     pub fn downcast<T: Node<B>>(&self) -> Option<&T> {
         self.node.as_any().downcast_ref::<T>()
     }
 
     pub fn downcast_mut<T: Node<B>>(&mut self) -> Option<&mut T> {
         self.node.as_any_mut().downcast_mut::<T>()
+    }
+
+    pub fn has_child(&self, name: impl AsRef<str>) -> bool {
+        let name = name.as_ref();
+        self.children.iter().any(|child| child.node.name.eq(name))
+    }
+
+    pub fn child(&self, name: impl AsRef<str>) -> Option<&NodeItem<B>> {
+        let name = name.as_ref();
+        self.children
+            .iter()
+            .find(|child| child.node.name.eq(name))
+            .map(|node| &node.node)
+    }
+
+    pub fn child_mut(&mut self, name: impl AsRef<str>) -> Option<&mut NodeItem<B>> {
+        let name = name.as_ref();
+        self.children
+            .iter_mut()
+            .find(|child| child.node.name.eq(name))
+            .map(|node| &mut node.node)
+    }
+
+    pub fn visit_children(&self, f: impl FnMut(&NodeItem<B>)) {
+        self.children.iter().map(|node| &node.node).for_each(f);
+    }
+
+    pub fn visit_children_mut(&mut self, f: impl FnMut(&mut NodeItem<B>)) {
+        self.children
+            .iter_mut()
+            .map(|node| &mut node.node)
+            .for_each(f);
+    }
+
+    #[must_use = "This method can fail if there is another child with the same name"]
+    pub fn add_child(&mut self, new_node: NodeItem<B>) -> bool {
+        if self
+            .children
+            .iter()
+            .any(|child| child.node.name == new_node.name)
+        {
+            return false;
+        }
+
+        self.children.push(ObservedNode::new(new_node));
+
+        true
+    }
+
+    // crate private so that user must go through layout to ensure all things are properly update
+    pub(crate) fn remove_child(&mut self, name: &str) -> Option<NodeItem<B>> {
+        Self::remove_child_impl(&mut self.children, name)
+    }
+
+    // crate private so that user must go through layout to ensure all things are properly update
+    pub(crate) fn remove_child_impl(
+        group: &mut Vec<ObservedNode<B>>,
+        name: &str,
+    ) -> Option<NodeItem<B>> {
+        let pos = group.iter().position(|node| node.node.name.eq(name))?;
+        Some(group.remove(pos).node)
+    }
+
+    // crate private so that user must go through layout to ensure all things are properly updated
+    #[must_use = "This method can fail if the old name was not found or there is another child with the same name"]
+    pub(crate) fn rename_child(&mut self, old_name: &str, new_name: String) -> bool {
+        Self::rename_child_impl(&mut self.children, old_name, new_name)
+    }
+
+    // crate private so that user must go through layout to ensure all things are properly updated
+    #[must_use = "This method can fail if the old name was not found or there is another child with the same name"]
+    pub(crate) fn rename_child_impl(
+        group: &mut [ObservedNode<B>],
+        old_name: &str,
+        new_name: String,
+    ) -> bool {
+        if group.iter().any(|node| node.node.name.eq(&new_name)) {
+            return false;
+        }
+
+        let Some(child) = group.iter_mut().find(|node| node.node.name.eq(old_name)) else {
+            return false;
+        };
+
+        child.node.name = new_name;
+        true
     }
 
     pub(crate) fn setup(&mut self, backend: &mut B) {

@@ -672,6 +672,39 @@ impl WgpuBackend {
         }
     }
 
+    pub fn add_texture(
+        &mut self,
+        name: impl Into<Cow<'static, str>>,
+        image: &[u8],
+    ) -> wgpu::Texture {
+        let image = image::load_from_memory(image).unwrap().to_rgba8();
+
+        let texture = self.device.create_texture_with_data(
+            &self.queue,
+            &wgpu::TextureDescriptor {
+                label: None,
+                size: wgpu::Extent3d {
+                    width: image.width(),
+                    height: image.height(),
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            },
+            wgpu::wgt::TextureDataOrder::LayerMajor,
+            image.as_raw(),
+        );
+
+        self.textures
+            .image_cache
+            .insert(name.into(), texture.clone());
+        texture
+    }
+
     pub fn load_textures_from_bytes<'a>(
         &mut self,
         names_and_bytes: impl IntoIterator<Item = (&'a str, Cow<'a, [u8]>)>,

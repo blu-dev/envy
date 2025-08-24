@@ -1,7 +1,11 @@
+mod animations;
 mod backend;
 mod node;
 mod tree;
 
+pub use animations::{
+    Animation, AnimationChannel, AnimationTransform, NodeAnimation, TransformStep,
+};
 pub use backend::{EnvyBackend, PreparedGlyph, TextLayoutArgs};
 pub use node::{
     EmptyNode, ImageNode, Node, NodeDisjointAccessor, NodeItem, NodeTransform, TextNode,

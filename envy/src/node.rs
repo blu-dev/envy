@@ -564,6 +564,10 @@ impl<B: EnvyBackend> NodeItem<B> {
         &mut self.transform
     }
 
+    pub fn color(&self) -> [u8; 4] {
+        self.color
+    }
+
     pub fn with_on_update(mut self, callback: impl NodeUpdateCallback<B>) -> Self {
         self.update.push(Box::new(callback));
         self
@@ -571,6 +575,10 @@ impl<B: EnvyBackend> NodeItem<B> {
 
     pub fn add_on_update(&mut self, callback: impl NodeUpdateCallback<B>) {
         self.update.push(Box::new(callback));
+    }
+
+    pub fn set_implementation(&mut self, node: impl Node<B>) {
+        self.node = Box::new(node);
     }
 
     pub fn is<T: Node<B>>(&self) -> bool {
@@ -606,7 +614,7 @@ impl<B: EnvyBackend> NodeItem<B> {
             .map(|node| &mut node.node)
     }
 
-    pub fn visit_children(&self, f: impl FnMut(&NodeItem<B>)) {
+    pub fn visit_children<'a>(&'a self, f: impl FnMut(&'a NodeItem<B>)) {
         self.children.iter().map(|node| &node.node).for_each(f);
     }
 
@@ -644,6 +652,42 @@ impl<B: EnvyBackend> NodeItem<B> {
     ) -> Option<NodeItem<B>> {
         let pos = group.iter().position(|node| node.node.name.eq(name))?;
         Some(group.remove(pos).node)
+    }
+
+    #[must_use = "This method can fail if the child with the specified name was not found"]
+    pub(crate) fn move_child_backward(&mut self, name: &str) -> bool {
+        Self::move_child_backward_impl(&mut self.children, name)
+    }
+
+    #[must_use = "This method can fail if the child with the specified name was not found"]
+    pub(crate) fn move_child_forward(&mut self, name: &str) -> bool {
+        Self::move_child_forward_impl(&mut self.children, name)
+    }
+
+    #[must_use = "This method can fail if the child with the specified name was not found"]
+    pub(crate) fn move_child_backward_impl(group: &mut Vec<ObservedNode<B>>, name: &str) -> bool {
+        let Some(pos) = group.iter().position(|node| node.node.name.eq(name)) else {
+            return false;
+        };
+
+        if pos > 0 {
+            group.swap(pos, pos - 1);
+        }
+
+        true
+    }
+
+    #[must_use = "This method can fail if the child with the specified name was not found"]
+    pub(crate) fn move_child_forward_impl(group: &mut Vec<ObservedNode<B>>, name: &str) -> bool {
+        let Some(pos) = group.iter().position(|node| node.node.name.eq(name)) else {
+            return false;
+        };
+
+        if pos + 1 <= group.len() {
+            group.swap(pos, pos + 1);
+        }
+
+        true
     }
 
     // crate private so that user must go through layout to ensure all things are properly updated

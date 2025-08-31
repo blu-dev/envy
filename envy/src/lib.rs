@@ -1,4 +1,6 @@
 mod animations;
+#[cfg(feature = "asset")]
+pub mod asset;
 mod backend;
 mod node;
 mod tree;

@@ -11,8 +11,10 @@ use cosmic_text::{
     CacheKey, Command, Family, FontSystem, Metrics, SwashCache,
     fontdb::{FaceInfo, Source},
 };
-use envy::{DrawUniform, EnvyBackend, PreparedGlyph, TextLayoutArgs, ViewUniform};
-use glam::Vec3;
+use envy::{
+    DrawUniform, EnvyBackend, PreparedGlyph, TextLayoutArgs, ViewUniform, asset::EnvyAssetProvider,
+};
+use glam::{Mat4, Vec3, Vec4};
 use image::{ImageEncoder, codecs::png::PngEncoder};
 use indexmap::IndexMap;
 use lyon::{
@@ -79,6 +81,7 @@ impl TextureBackend {
         view_bgl: &wgpu::BindGroupLayout,
         draw_bgl: &wgpu::BindGroupLayout,
         render_target_format: wgpu::TextureFormat,
+        sample_count: usize,
     ) -> Self {
         let mut default_texture_bytes = vec![0u8; 4 * 40 * 40];
         for y in 0..40 {
@@ -182,7 +185,10 @@ impl TextureBackend {
                 conservative: false,
             },
             depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
+            multisample: wgpu::MultisampleState {
+                count: sample_count as u32,
+                ..Default::default()
+            },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
                 entry_point: Some("fragment"),
@@ -212,6 +218,11 @@ impl TextureBackend {
             pipeline: texture_pipeline,
             vertex_buffer,
         }
+    }
+
+    fn reset(&mut self) {
+        self.image_cache.clear();
+        self.textures.clear();
     }
 }
 
@@ -332,6 +343,7 @@ impl WgpuFontBackend {
         view_bgl: &wgpu::BindGroupLayout,
         draw_bgl: &wgpu::BindGroupLayout,
         render_target_format: wgpu::TextureFormat,
+        sample_count: usize,
     ) -> Self {
         let system = FontSystem::new_with_locale_and_db(
             "".to_string(),
@@ -377,7 +389,10 @@ impl WgpuFontBackend {
                 conservative: false,
             },
             depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
+            multisample: wgpu::MultisampleState {
+                count: sample_count as u32,
+                ..Default::default()
+            },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
                 entry_point: Some("fragment"),
@@ -403,13 +418,25 @@ impl WgpuFontBackend {
         }
     }
 
-    pub fn add_font(&mut self, name: impl Into<String>, font_data: Vec<u8>) {
+    pub fn reset(&mut self) {
+        self.index_ranges.clear();
+        self.vertices.truncate(0);
+        self.indices.truncate(0);
+        self.loaded_fonts.clear();
+        self.system = FontSystem::new_with_locale_and_db(
+            "".to_string(),
+            cosmic_text::fontdb::Database::new(),
+        );
+    }
+
+    pub fn add_font(&mut self, name: impl Into<String>, font_data: Vec<u8>) -> FaceInfo {
         let ids = self
             .system
             .db_mut()
             .load_font_source(Source::Binary(Arc::new(font_data)));
         let face = self.system.db().face(ids[0]).unwrap();
         self.loaded_fonts.insert(name.into(), face.clone());
+        face.clone()
     }
 
     fn prepare_glyph(&mut self, key: CacheKey, width: f32, height: f32) -> WgpuGlyphHandle {
@@ -428,7 +455,7 @@ impl WgpuFontBackend {
 
         let center_x = width / 2.0;
         let center_y = height / 2.0;
-        let norm_point = |x: f32, y: f32| point(x - center_x, y + center_y);
+        let norm_point = |x: f32, y: f32| point(x - center_x, y - center_y);
 
         for command in commands.iter() {
             match command {
@@ -490,6 +517,7 @@ impl WgpuFontBackend {
 
     pub fn layout(
         &mut self,
+        uniforms: &mut BufferVec<DrawUniform>,
         args: TextLayoutArgs<'_, WgpuBackend>,
     ) -> Vec<PreparedGlyph<WgpuBackend>> {
         let face = &self.loaded_fonts[args.handle.0];
@@ -536,9 +564,11 @@ impl WgpuFontBackend {
         let mut prepared_glyphs = vec![];
         for (key, w, h, x, y) in glyphs {
             let handle = self.prepare_glyph(key, w, h);
+            let uniform_idx = uniforms.len();
+            uniforms.push(DrawUniform::new(Mat4::IDENTITY, Vec4::ONE));
             prepared_glyphs.push(PreparedGlyph {
                 glyph_handle: handle,
-                uniform_handle: todo!(),
+                uniform_handle: WgpuUniformHandle(uniform_idx),
                 offset_in_buffer: glam::Vec2::new(x, y),
                 size: glam::Vec2::new(w, h),
             });
@@ -546,6 +576,10 @@ impl WgpuFontBackend {
 
         prepared_glyphs
     }
+}
+
+const fn align_up(value: usize, align: usize) -> usize {
+    (value + (align - 1)) & !(align - 1)
 }
 
 struct InPlaceBufferBuilders<'a> {
@@ -607,6 +641,7 @@ impl WgpuBackend {
         device: wgpu::Device,
         queue: wgpu::Queue,
         render_target_format: wgpu::TextureFormat,
+        sample_count: usize,
     ) -> Self {
         let view_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("envy_view_layout"),
@@ -654,10 +689,22 @@ impl WgpuBackend {
             }],
         });
 
-        let textures =
-            TextureBackend::new(&device, &queue, &view_bgl, &draw_bgl, render_target_format);
+        let textures = TextureBackend::new(
+            &device,
+            &queue,
+            &view_bgl,
+            &draw_bgl,
+            render_target_format,
+            sample_count,
+        );
 
-        let fonts = WgpuFontBackend::new(&device, &view_bgl, &draw_bgl, render_target_format);
+        let fonts = WgpuFontBackend::new(
+            &device,
+            &view_bgl,
+            &draw_bgl,
+            render_target_format,
+            sample_count,
+        );
 
         Self {
             device,
@@ -670,6 +717,12 @@ impl WgpuBackend {
             fonts,
             uniform_bind_group: None,
         }
+    }
+
+    pub fn clear(&mut self) {
+        self.uniforms.truncate(0);
+        self.textures.reset();
+        self.fonts.reset();
     }
 
     pub fn add_texture(
@@ -699,9 +752,34 @@ impl WgpuBackend {
             image.as_raw(),
         );
 
-        self.textures
+        if let Some(prev) = self
+            .textures
             .image_cache
-            .insert(name.into(), texture.clone());
+            .insert(name.into(), texture.clone())
+        {
+            self.textures.textures.iter_mut().for_each(|reserved| {
+                if reserved.texture == prev {
+                    reserved.texture = texture.clone();
+                    reserved.bind_group =
+                        self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                            label: None,
+                            layout: &self.textures.texture_bgl,
+                            entries: &[
+                                wgpu::BindGroupEntry {
+                                    binding: 0,
+                                    resource: wgpu::BindingResource::Sampler(&reserved.sampler),
+                                },
+                                wgpu::BindGroupEntry {
+                                    binding: 1,
+                                    resource: wgpu::BindingResource::TextureView(
+                                        &texture.create_view(&Default::default()),
+                                    ),
+                                },
+                            ],
+                        });
+                }
+            });
+        }
         texture
     }
 
@@ -747,6 +825,18 @@ impl WgpuBackend {
                 .into_iter()
                 .map(|(name, path)| (name, std::fs::read(path).unwrap().into())),
         )
+    }
+
+    pub fn add_font(&mut self, name: impl Into<String>, font: Vec<u8>) -> FaceInfo {
+        self.fonts.add_font(name, font)
+    }
+
+    pub fn get_texture(&self, name: impl AsRef<str>) -> Option<&wgpu::Texture> {
+        self.textures.image_cache.get(name.as_ref())
+    }
+
+    pub fn get_font_face_info(&self, name: impl AsRef<str>) -> Option<&FaceInfo> {
+        self.fonts.loaded_fonts.get(name.as_ref())
     }
 
     pub fn load_fonts_from_bytes<'a>(
@@ -811,6 +901,10 @@ impl WgpuBackend {
             .insert_before(index, new.into(), face_name);
     }
 
+    pub fn remove_font(&mut self, name: &str) {
+        let _ = self.fonts.loaded_fonts.shift_remove(name);
+    }
+
     pub fn remove_texture(&mut self, name: &str) {
         let _ = self.textures.image_cache.shift_remove(name);
     }
@@ -858,10 +952,6 @@ impl WgpuBackend {
     }
 
     pub fn dump_textures(&self) -> Vec<(String, Vec<u8>)> {
-        const fn align_up(value: usize, align: usize) -> usize {
-            (value + (align - 1)) & !(align - 1)
-        }
-
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
@@ -1000,7 +1090,7 @@ impl EnvyBackend for WgpuBackend {
     }
 
     fn layout_text(&mut self, args: TextLayoutArgs<'_, Self>) -> Vec<PreparedGlyph<Self>> {
-        self.fonts.layout(args)
+        self.fonts.layout(&mut self.uniforms, args)
     }
 
     fn draw_texture(
@@ -1089,4 +1179,96 @@ impl EnvyBackend for WgpuBackend {
     //     existing_texture.texture = texture.clone();
     //     existing_texture.bind_group = bind_group;
     // }
+}
+
+impl EnvyAssetProvider for WgpuBackend {
+    fn fetch_font_bytes_by_name<'a>(&'a self, name: &str) -> Cow<'a, [u8]> {
+        self.fonts
+            .loaded_fonts
+            .get(name)
+            .map(|face| match &face.source {
+                Source::Binary(binary) => Cow::Borrowed((**binary).as_ref()),
+                _ => unimplemented!(),
+            })
+            .unwrap()
+    }
+
+    fn fetch_image_bytes_by_name<'a>(&'a self, name: &str) -> Cow<'a, [u8]> {
+        let texture = self.textures.image_cache.get(name).unwrap();
+
+        let size = texture.size();
+        let stride = size.width as u64 * 4;
+        let real_stride = align_up(stride as usize, 0x100) as u64;
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: real_stride * size.height as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("dump_texture_encoder"),
+            });
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d { x: 0, y: 0, z: 0 },
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(real_stride as u32),
+                    rows_per_image: None,
+                },
+            },
+            size,
+        );
+
+        let index = self.queue.submit([encoder.finish()]);
+        buffer.map_async(wgpu::MapMode::Read, .., |res| res.unwrap());
+        self.device
+            .poll(wgpu::PollType::WaitForSubmissionIndex(index))
+            .unwrap();
+
+        let stride = (size.width * 4) as usize;
+        let real_stride = align_up(stride, 0x100);
+        let bytes = buffer.get_mapped_range(..);
+
+        let mut image_bytes = vec![0u8; stride * size.height as usize];
+        for y in 0..size.height as usize {
+            image_bytes[y * stride..(y + 1) * stride]
+                .copy_from_slice(&bytes[y * real_stride..y * real_stride + stride]);
+        }
+
+        let mut out = std::io::Cursor::new(vec![]);
+        {
+            let encoder = PngEncoder::new_with_quality(
+                &mut out,
+                image::codecs::png::CompressionType::Best,
+                image::codecs::png::FilterType::Adaptive,
+            );
+            encoder
+                .write_image(
+                    &image_bytes,
+                    size.width,
+                    size.height,
+                    image::ExtendedColorType::Rgba8,
+                )
+                .unwrap();
+        }
+
+        Cow::Owned(out.into_inner())
+    }
+
+    fn load_font_bytes_with_name(&mut self, name: String, bytes: Vec<u8>) {
+        let _ = self.add_font(name, bytes);
+    }
+
+    fn load_image_bytes_with_name(&mut self, name: String, bytes: Vec<u8>) {
+        let _ = self.add_texture(name, &bytes);
+    }
 }

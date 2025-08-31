@@ -447,11 +447,16 @@ fn visit_node<T: EnvyBackend>(
     });
 }
 
+pub enum TreeViewerCommand {
+    MoveBackward,
+    MoveForward,
+}
+
 pub fn show_tree_viewer<T: EnvyBackend>(
     ui: &mut egui::Ui,
     icons: &super::Icons,
     tree: &LayoutTree<T>,
-) -> Vec<ItemTreeCommand<Utf8PathBuf>> {
+) -> Vec<ItemTreeCommand<Utf8PathBuf, TreeViewerCommand>> {
     let item_tree = ItemTree::new(Id::new("asset_tree"));
 
     ui.push_id("sub-ui", |ui| {
@@ -481,6 +486,16 @@ pub fn show_tree_viewer<T: EnvyBackend>(
                         data.insert_temp(ui_id.with("renaming"), String::new());
                     });
                     ui.close();
+                } else if ui.button("Move Back").clicked() {
+                    return Some(ItemTreeCommand::UserCommand {
+                        id: id.clone(),
+                        command: TreeViewerCommand::MoveBackward,
+                    });
+                } else if ui.button("Move Forward").clicked() {
+                    return Some(ItemTreeCommand::UserCommand {
+                        id: id.clone(),
+                        command: TreeViewerCommand::MoveForward,
+                    });
                 }
 
                 None

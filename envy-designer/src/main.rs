@@ -1,37 +1,29 @@
-use std::{borrow::Cow, sync::Arc};
+use std::{path::PathBuf, sync::Arc};
 
 use bytemuck::{Pod, Zeroable};
-use camino::{Utf8Path, Utf8PathBuf};
+use camino::Utf8PathBuf;
 use eframe::{App, NativeOptions};
 use egui::{IconData, Rect, ViewportBuilder};
 use egui_wgpu::CallbackTrait;
-use envy::{
-    Animation, AnimationChannel, AnimationTransform, EmptyNode, ImageNode, NodeAnimation,
-    NodeDisjointAccessor, NodeItem, NodeTransform, TransformStep,
-};
+use envy::{EmptyNode, ImageNode, LayoutTree, Node, NodeItem, NodeTransform, TextNode};
 use envy_wgpu::WgpuBackend;
-use glam::Vec2;
 
 use crate::{
-    resource_viewer::{ImageResourceData, ResourceViewer},
-    tree_viewer::ItemTreeCommand,
+    resource_viewer::{
+        FontResourceData, FontResourceViewer, FontViewerCommand, ImageResourceData,
+        ImageResourceViewer, ImageViewerCommand,
+    },
+    tree_viewer::{ItemTreeCommand, TreeViewerCommand},
 };
 
-// use crate::{
-//     tree::{Anchor, EmptyNode, Node, TextNode, TextureNode},
-//     tree_viewer::ItemTreeCommand,
-// wgpu_backend::WgpuBackend,
-// };
-
-// mod file;
-// mod tree;
 mod resource_viewer;
 mod tree_viewer;
-// mod wgpu_backend;
 
 pub struct EnvyDesigner {
+    editing_file_path: Option<PathBuf>,
     editing_node_path: Option<Utf8PathBuf>,
-    resources: ResourceViewer,
+    image_resources: ImageResourceViewer,
+    font_resources: FontResourceViewer,
 }
 
 impl EnvyDesigner {
@@ -40,81 +32,142 @@ impl EnvyDesigner {
 
         let wgpu_render_state = ctx.wgpu_render_state.as_ref()?;
 
-        let mut resources = EnvyResources::new(wgpu_render_state);
-        let image_data = std::fs::read("./icon.png").unwrap();
-        let texture = resources.backend.add_texture("icon", &image_data);
-        let image_data =
-            std::fs::read("/home/blujay/.config/Ryujinx/sdcard/stratus_header.png").unwrap();
-        let texture_2 = resources.backend.add_texture("header", &image_data);
+        let resources = EnvyResources::new(wgpu_render_state);
 
-        let view = texture.create_view(&Default::default());
-        let view_2 = texture_2.create_view(&Default::default());
-
-        let texture_id = wgpu_render_state.renderer.write().register_native_texture(
+        let mut egui_renderer = wgpu_render_state.renderer.write();
+        let mut viewer = ImageResourceViewer::new();
+        update_image_viewer_from_backend(
             &wgpu_render_state.device,
-            &view,
-            wgpu::FilterMode::Linear,
-        );
-        let texture_id_2 = wgpu_render_state.renderer.write().register_native_texture(
-            &wgpu_render_state.device,
-            &view_2,
-            wgpu::FilterMode::Linear,
+            &resources.backend,
+            &mut egui_renderer,
+            &mut viewer,
         );
 
-        let mut viewer = ResourceViewer::new();
-        viewer.add_image(
-            "icon",
-            ImageResourceData {
-                texture_id,
-                size: egui::Vec2::new(texture.width() as f32, texture.height() as f32),
-            },
-        );
-        viewer.add_image(
-            "header",
-            ImageResourceData {
-                texture_id: texture_id_2,
-                size: egui::Vec2::new(texture_2.width() as f32, texture_2.height() as f32),
-            },
-        );
+        let mut font_viewer = FontResourceViewer::new();
+        update_font_viewer_from_backend(&resources.backend, &mut font_viewer);
 
-        wgpu_render_state
-            .renderer
-            .write()
-            .callback_resources
-            .insert(resources);
+        egui_renderer.callback_resources.insert(resources);
 
         Some(Self {
+            editing_file_path: None,
             editing_node_path: None,
-            resources: viewer,
+            image_resources: viewer,
+            font_resources: font_viewer,
         })
+    }
+}
+
+fn update_font_viewer_from_backend(backend: &WgpuBackend, font_viewer: &mut FontResourceViewer) {
+    font_viewer.clear();
+    for font in backend.iter_font_names() {
+        let face = backend.get_font_face_info(font).unwrap();
+        font_viewer.add_font(font, FontResourceData { face: face.clone() });
+    }
+}
+
+fn update_image_viewer_from_backend(
+    device: &wgpu::Device,
+    backend: &WgpuBackend,
+    egui_renderer: &mut egui_wgpu::Renderer,
+    viewer: &mut ImageResourceViewer,
+) {
+    viewer.clear();
+    for name in backend.iter_texture_names() {
+        let texture = backend.get_texture(name).unwrap();
+        let id = egui_renderer.register_native_texture(
+            device,
+            &texture.create_view(&Default::default()),
+            wgpu::FilterMode::Linear,
+        );
+        let size = texture.size();
+        viewer.add_image(
+            name,
+            ImageResourceData {
+                texture_id: id,
+                size: egui::Vec2::new(size.width as f32, size.height as f32),
+            },
+        );
     }
 }
 
 impl App for EnvyDesigner {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         ctx.request_repaint();
-        // egui::TopBottomPanel::top("file_bar").show(ctx, |ui| {
-        //     if ui.button("Save File").clicked() {
-        //         let state = frame.wgpu_render_state().unwrap().renderer.read();
-        //         let res = &state.callback_resources.get::<EnvyResources>().unwrap();
-        //         let mut file = file::MenuFile::from_tree(&res.tree);
-        //         file.image_resources = res.backend.dump_textures();
-        //         file.font_resources = res.backend.dump_fonts();
+        let mut data = frame
+            .wgpu_render_state()
+            .unwrap()
+            .renderer
+            .write()
+            .callback_resources
+            .remove::<EnvyResources>()
+            .unwrap();
 
-        //         file.save("/home/blujay/.config/Ryujinx/sdcard/stratus.envy");
-        //     }
-        // });
+        egui::TopBottomPanel::top("file_bar").show(ctx, |ui| {
+            ui.menu_button("File", |ui| {
+                if ui.button("New File").clicked() {
+                    data.backend.clear();
+                    data.tree = LayoutTree::new();
+                    data.tree.setup(&mut data.backend);
+                    self.editing_file_path = None;
+                    update_font_viewer_from_backend(&data.backend, &mut self.font_resources);
+                    let state = frame.wgpu_render_state().unwrap();
+                    update_image_viewer_from_backend(
+                        &state.device,
+                        &data.backend,
+                        &mut state.renderer.write(),
+                        &mut self.image_resources,
+                    );
+                    ui.close();
+                } else if ui.button("Open File").clicked() {
+                    let file = rfd::FileDialog::new()
+                        .add_filter("ENVY Layout File", &["envy"])
+                        .pick_file();
+                    if let Some(file) = file {
+                        let bytes = std::fs::read(&file).unwrap();
+                        data.backend.clear();
+                        data.tree = envy::asset::deserialize(&mut data.backend, &bytes);
+                        data.tree.setup(&mut data.backend);
+                        self.editing_file_path = Some(file);
+                        update_font_viewer_from_backend(&data.backend, &mut self.font_resources);
+                        let state = frame.wgpu_render_state().unwrap();
+                        update_image_viewer_from_backend(
+                            &state.device,
+                            &data.backend,
+                            &mut state.renderer.write(),
+                            &mut self.image_resources,
+                        );
+                    }
+                    ui.close();
+                } else if ui.button("Save File").clicked() {
+                    if let Some(current) = self.editing_file_path.as_ref() {
+                        let bytes = envy::asset::serialize(&data.tree, &data.backend);
+                        std::fs::write(current, bytes).unwrap();
+                    } else {
+                        let file = rfd::FileDialog::new()
+                            .add_filter("ENVY Layout File", &["envy"])
+                            .save_file();
+                        if let Some(file) = file {
+                            let bytes = envy::asset::serialize(&data.tree, &data.backend);
+                            std::fs::write(&file, bytes).unwrap();
+                            self.editing_file_path = Some(file);
+                        }
+                    }
+                    ui.close();
+                } else if ui.button("Save File As").clicked() {
+                    let file = rfd::FileDialog::new()
+                        .add_filter("ENVY Layout File", &["envy"])
+                        .save_file();
+                    if let Some(file) = file {
+                        let bytes = envy::asset::serialize(&data.tree, &data.backend);
+                        std::fs::write(&file, bytes).unwrap();
+                        self.editing_file_path = Some(file);
+                    }
+                    ui.close();
+                }
+            });
+        });
 
         egui::SidePanel::left("tree_viewer").show(ctx, |ui| {
-            let mut data = frame
-                .wgpu_render_state()
-                .unwrap()
-                .renderer
-                .write()
-                .callback_resources
-                .remove::<EnvyResources>()
-                .unwrap();
-
             let commands = tree_viewer::show_tree_viewer(ui, &data.icons, &data.tree);
             for command in commands {
                 match command {
@@ -157,6 +210,18 @@ impl App for EnvyDesigner {
                     ItemTreeCommand::DeleteItem(path) => {
                         assert!(data.tree.remove_node(&path).is_some());
                     }
+                    ItemTreeCommand::UserCommand {
+                        id,
+                        command: TreeViewerCommand::MoveBackward,
+                    } => {
+                        assert!(data.tree.move_node_backward_by_path(&id));
+                    }
+                    ItemTreeCommand::UserCommand {
+                        id,
+                        command: TreeViewerCommand::MoveForward,
+                    } => {
+                        assert!(data.tree.move_node_forward_by_path(&id));
+                    }
                     _ => {}
                 }
             }
@@ -183,359 +248,327 @@ impl App for EnvyDesigner {
                     break;
                 }
             }
-
-            frame
-                .wgpu_render_state()
-                .unwrap()
-                .renderer
-                .write()
-                .callback_resources
-                .insert(data);
         });
 
-        egui::SidePanel::right("test").show(ctx, |ui| {
-            self.resources.show(ui);
-            // ui.image(egui::ImageSource::Texture(egui::load::SizedTexture {
-            //     id: self.texture_id,
-            //     size: egui::Vec2::splat(40.0),
-            // }));
+        if let Some(node) = self.editing_node_path.as_ref() {
+            if let Some(node) = data.tree.get_node_by_path_mut(node) {
+                egui::SidePanel::left("node_editor").show(ctx, |ui| {
+                    ui.heading("Transform");
+                    ui.separator();
+
+                    egui::Grid::new("transform").show(ui, |ui| {
+                        let transform = node.transform_mut();
+                        ui.label("Position");
+                        egui::Grid::new("position").show(ui, |ui| {
+                            ui.add(egui::DragValue::new(&mut transform.position.x).speed(1.0));
+                            ui.add(egui::DragValue::new(&mut transform.position.y).speed(1.0));
+                        });
+                        ui.end_row();
+                        ui.label("Size");
+                        egui::Grid::new("Size").show(ui, |ui| {
+                            ui.add(egui::DragValue::new(&mut transform.size.x).speed(1.0));
+                            ui.add(egui::DragValue::new(&mut transform.size.y).speed(1.0));
+                        });
+                        ui.end_row();
+                        ui.label("Scale");
+                        egui::Grid::new("scale").show(ui, |ui| {
+                            ui.add(egui::DragValue::new(&mut transform.scale.x).speed(1.0));
+                            ui.add(egui::DragValue::new(&mut transform.scale.y).speed(1.0));
+                        });
+                        ui.end_row();
+                        ui.label("Rotation");
+                        ui.add(egui::DragValue::new(&mut transform.angle).speed(1.0));
+                        if transform.angle < 0.0 {
+                            transform.angle += -(transform.angle / 360.0).floor() * 360.0;
+                        }
+                        transform.angle = transform.angle % 360.0;
+                        ui.end_row();
+                    });
+
+                    ui.heading("Node Implementation");
+                    ui.separator();
+
+                    egui::Grid::new("node-kind-selector").show(ui, |ui| {
+                        ui.label("Node Kind");
+                        egui::ComboBox::new("selector", "")
+                            .selected_text(if node.is::<EmptyNode>() {
+                                "Empty"
+                            } else if node.is::<ImageNode<WgpuBackend>>() {
+                                "Image"
+                            } else if node.is::<TextNode<WgpuBackend>>() {
+                                "Text"
+                            } else {
+                                unimplemented!()
+                            })
+                            .show_ui(ui, |ui| {
+                                if ui.selectable_label(false, "Empty Node").clicked() {
+                                    if !node.is::<EmptyNode>() {
+                                        node.set_implementation(EmptyNode);
+                                    }
+                                    ui.close();
+                                } else if ui.selectable_label(false, "Image Node").clicked() {
+                                    if !node.is::<ImageNode<WgpuBackend>>() {
+                                        let mut image = ImageNode::new("");
+                                        image.setup_resources(&mut data.backend);
+                                        node.set_implementation(image);
+                                    }
+                                    ui.close();
+                                } else if ui.selectable_label(false, "Text Node").clicked() {
+                                    if !node.is::<TextNode<WgpuBackend>>() {
+                                        let mut text = TextNode::new("", 32.0, 32.0, "");
+                                        text.setup_resources(&mut data.backend);
+                                        node.set_implementation(text);
+                                    }
+                                    ui.close();
+                                }
+                            })
+                    });
+
+                    if let Some(image) = node.downcast_mut::<ImageNode<WgpuBackend>>() {
+                        egui::Grid::new("image-selector").show(ui, |ui| {
+                            ui.label("Texture");
+                            egui::ComboBox::new("texture", "")
+                                .selected_text(image.resource_name())
+                                .show_ui(ui, |ui| {
+                                    for texture in data.backend.iter_texture_names() {
+                                        if ui.selectable_label(false, texture).clicked() {
+                                            image.set_resource_name(texture);
+                                            ui.close();
+                                            break;
+                                        }
+                                    }
+                                });
+                            ui.end_row();
+                        });
+                    } else if let Some(text) = node.downcast_mut::<TextNode<WgpuBackend>>() {
+                        egui::Grid::new("font-selector").show(ui, |ui| {
+                            ui.label("Font");
+                            egui::ComboBox::new("font", "")
+                                .selected_text(text.font_name())
+                                .show_ui(ui, |ui| {
+                                    for font_name in data.backend.iter_font_names() {
+                                        if ui.selectable_label(false, font_name).clicked() {
+                                            text.set_font_name(font_name);
+                                            ui.close();
+                                            break;
+                                        }
+                                    }
+                                });
+                            ui.end_row();
+                            let mut font_size = text.font_size();
+                            let mut line_height = text.line_height();
+                            ui.label("Font Size");
+                            ui.add(
+                                egui::DragValue::new(&mut font_size)
+                                    .range(1.0..=std::f32::INFINITY),
+                            );
+                            ui.end_row();
+                            ui.label("Line Height");
+                            ui.add(
+                                egui::DragValue::new(&mut line_height)
+                                    .range(1.0..=std::f32::INFINITY),
+                            );
+                            ui.end_row();
+                            text.set_font_size(font_size);
+                            text.set_line_height(line_height);
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Text");
+                            ui.text_edit_multiline(text.text_mut());
+                        });
+                    }
+                });
+            }
+        }
+
+        let mut image_command = None;
+        let mut font_command = None;
+        egui::SidePanel::right("resource_viewer").show(ctx, |ui| {
+            ui.heading("Resources");
+            ui.separator();
+            ui.heading("Images");
+            image_command = self.image_resources.show(ui);
+            ui.separator();
+            ui.heading("Fonts");
+            font_command = self.font_resources.show(ui);
         });
 
-        // if let Some(editing_node_path) = self.editing_node_path.as_ref() {
-        //     egui::SidePanel::left("node_viewer").show(ctx, |ui| {
-        //         let mut data = frame
-        //             .wgpu_render_state()
-        //             .unwrap()
-        //             .renderer
-        //             .write()
-        //             .callback_resources
-        //             .remove::<EnvyResources>()
-        //             .unwrap();
+        match image_command {
+            Some(ImageViewerCommand::Remove(image_name)) => {
+                if let Some(prev) = self.image_resources.remove(&image_name) {
+                    frame
+                        .wgpu_render_state()
+                        .unwrap()
+                        .renderer
+                        .write()
+                        .free_texture(&prev.texture_id);
+                }
 
-        //         if let Some(node) = data.tree.get_node_by_path_mut(editing_node_path) {
-        //             ui.heading("Node Settings");
-        //             ui.separator();
+                data.tree.walk_tree_mut(|node| {
+                    if let Some(node) = node.downcast_mut::<ImageNode<WgpuBackend>>() {
+                        if node.resource_name() == image_name {
+                            node.invalidate_image_handle();
+                        }
+                    }
+                });
+                data.backend.remove_texture(&image_name);
+            }
+            Some(ImageViewerCommand::Replace(image_name)) => {
+                let new_image_path = rfd::FileDialog::new()
+                    .add_filter("PNG Image", &["png"])
+                    .pick_file();
 
-        //             ui.horizontal(|ui| {
-        //                 ui.label("Node Position");
-        //                 ui.add(egui::DragValue::new(&mut node.settings.position.x));
-        //                 ui.add(egui::DragValue::new(&mut node.settings.position.y));
-        //             });
+                if let Some(path) = new_image_path {
+                    let new_texture = data
+                        .backend
+                        .add_texture(image_name.clone(), &std::fs::read(&path).unwrap());
 
-        //             ui.horizontal(|ui| {
-        //                 ui.label("Node Size");
-        //                 ui.add(egui::DragValue::new(&mut node.settings.size.x));
-        //                 ui.add(egui::DragValue::new(&mut node.settings.size.y));
-        //             });
+                    let view = new_texture.create_view(&Default::default());
+                    let state = frame.wgpu_render_state().unwrap();
+                    let texture_id = state.renderer.write().register_native_texture(
+                        &state.device,
+                        &view,
+                        wgpu::FilterMode::Linear,
+                    );
 
-        //             ui.horizontal(|ui| {
-        //                 const ANCHORS: &[&str] = &[
-        //                     "Top Left",
-        //                     "Top Center",
-        //                     "Top Right",
-        //                     "Center Left",
-        //                     "Center",
-        //                     "Center Right",
-        //                     "Bottom Left",
-        //                     "Bottom Center",
-        //                     "Bottom Right",
-        //                     "Custom",
-        //                 ];
+                    if let Some(prev) = self.image_resources.add_image(
+                        image_name,
+                        ImageResourceData {
+                            texture_id,
+                            size: egui::Vec2::new(
+                                new_texture.size().width as f32,
+                                new_texture.size().height as f32,
+                            ),
+                        },
+                    ) {
+                        state.renderer.write().free_texture(&prev.texture_id);
+                    }
+                }
+            }
+            Some(ImageViewerCommand::Import) => {
+                let new_image_path = rfd::FileDialog::new()
+                    .add_filter("PNG Image", &["png"])
+                    .pick_file();
 
-        //                 let idx = match node.settings.anchor {
-        //                     Anchor::TopLeft => 0,
-        //                     Anchor::TopCenter => 1,
-        //                     Anchor::TopRight => 2,
-        //                     Anchor::CenterLeft => 3,
-        //                     Anchor::Center => 4,
-        //                     Anchor::CenterRight => 5,
-        //                     Anchor::BottomLeft => 6,
-        //                     Anchor::BottomCenter => 7,
-        //                     Anchor::BottomRight => 8,
-        //                     Anchor::Custom(_) => 9,
-        //                 };
+                if let Some(path) = new_image_path {
+                    let image_name = path.file_stem().unwrap().to_str().unwrap().to_string();
 
-        //                 let mut new_idx = idx;
+                    let new_texture = data
+                        .backend
+                        .add_texture(image_name.clone(), &std::fs::read(&path).unwrap());
 
-        //                 ui.label("Anchor");
-        //                 egui::ComboBox::new("anchor-picker", "").show_index(
-        //                     ui,
-        //                     &mut new_idx,
-        //                     ANCHORS.len(),
-        //                     |idx| ANCHORS[idx],
-        //                 );
+                    let view = new_texture.create_view(&Default::default());
+                    let state = frame.wgpu_render_state().unwrap();
+                    let texture_id = state.renderer.write().register_native_texture(
+                        &state.device,
+                        &view,
+                        wgpu::FilterMode::Linear,
+                    );
 
-        //                 if new_idx != idx {
-        //                     node.settings.anchor = match new_idx {
-        //                         0 => Anchor::TopLeft,
-        //                         1 => Anchor::TopCenter,
-        //                         2 => Anchor::TopRight,
-        //                         3 => Anchor::CenterLeft,
-        //                         4 => Anchor::Center,
-        //                         5 => Anchor::CenterRight,
-        //                         6 => Anchor::BottomLeft,
-        //                         7 => Anchor::BottomCenter,
-        //                         8 => Anchor::BottomRight,
-        //                         9 => Anchor::Custom(node.settings.anchor.as_vec()),
-        //                         _ => unimplemented!(),
-        //                     }
-        //                 }
+                    if let Some(prev) = self.image_resources.add_image(
+                        image_name,
+                        ImageResourceData {
+                            texture_id,
+                            size: egui::Vec2::new(
+                                new_texture.size().width as f32,
+                                new_texture.size().height as f32,
+                            ),
+                        },
+                    ) {
+                        state.renderer.write().free_texture(&prev.texture_id);
+                    }
+                }
+            }
+            Some(ImageViewerCommand::Rename { old, new }) => {
+                data.tree.walk_tree_mut(|node| {
+                    if let Some(image) = node.downcast_mut::<ImageNode<WgpuBackend>>() {
+                        if image.resource_name() == old {
+                            image.set_resource_name(new.clone());
+                        }
+                    }
+                });
 
-        //                 if let Anchor::Custom(mut custom) = node.settings.anchor {
-        //                     ui.add(egui::DragValue::new(&mut custom.x).speed(0.001));
-        //                     ui.add(egui::DragValue::new(&mut custom.y).speed(0.001));
-        //                     node.settings.anchor = Anchor::Custom(custom);
-        //                 }
-        //             });
+                self.image_resources.rename(&old, new.clone());
+                data.backend.rename_texture(&old, new);
+            }
+            None => {}
+        }
 
-        //             ui.horizontal(|ui| {
-        //                 ui.label("Rotation");
-        //                 ui.add(egui::DragValue::new(&mut node.settings.rotation).speed(1.0));
-        //                 if node.settings.rotation < 0.0 {
-        //                     node.settings.rotation += -node.settings.rotation.floor() * 360.0;
-        //                 }
-        //                 node.settings.rotation = node.settings.rotation % 360.0;
-        //             });
+        match font_command {
+            Some(FontViewerCommand::Remove(font_name)) => {
+                let _ = self.font_resources.remove(&font_name);
 
-        //             ui.horizontal(|ui| {
-        //                 ui.label("Scale");
-        //                 ui.add(egui::DragValue::new(&mut node.settings.scale.x).speed(0.01));
-        //                 ui.add(egui::DragValue::new(&mut node.settings.scale.y).speed(0.01));
-        //             });
+                data.tree.walk_tree_mut(|node| {
+                    if let Some(node) = node.downcast_mut::<TextNode<WgpuBackend>>() {
+                        if node.font_name() == font_name {
+                            node.invalidate_font_handle();
+                        }
+                    }
+                });
+                data.backend.remove_font(&font_name);
+            }
+            Some(FontViewerCommand::Replace(font_name)) => {
+                let new_image_path = rfd::FileDialog::new()
+                    .add_filter("Font Files", &["ttf", "otf"])
+                    .pick_file();
 
-        //             node.changed = true;
+                if let Some(path) = new_image_path {
+                    let new_font = data
+                        .backend
+                        .add_font(font_name.clone(), std::fs::read(&path).unwrap());
 
-        //             const NODE_KINDS: &[&str] = &["Empty Node", "Texture Node", "Text Node"];
+                    data.tree.walk_tree_mut(|node| {
+                        if let Some(text) = node.downcast_mut::<TextNode<WgpuBackend>>() {
+                            if text.font_name() == font_name {
+                                text.invalidate_font_handle();
+                            }
+                        }
+                    });
 
-        //             let idx = if node.try_downcast::<EmptyNode>().is_some() {
-        //                 0
-        //             } else if node.try_downcast::<TextureNode<WgpuBackend>>().is_some() {
-        //                 1
-        //             } else if node.try_downcast::<TextNode<WgpuBackend>>().is_some() {
-        //                 2
-        //             } else {
-        //                 unimplemented!()
-        //             };
+                    let _ = self
+                        .font_resources
+                        .add_font(font_name, FontResourceData { face: new_font });
+                }
+            }
+            Some(FontViewerCommand::Import) => {
+                let new_image_path = rfd::FileDialog::new()
+                    .add_filter("Font Files", &["ttf", "otf"])
+                    .pick_file();
 
-        //             let mut new_idx = idx;
+                if let Some(path) = new_image_path {
+                    let font_name = path.file_stem().unwrap().to_str().unwrap().to_string();
 
-        //             egui::ComboBox::new("node-kind-picker", "Node Kind").show_index(
-        //                 ui,
-        //                 &mut new_idx,
-        //                 NODE_KINDS.len(),
-        //                 |x| NODE_KINDS[x],
-        //             );
+                    let new_font = data
+                        .backend
+                        .add_font(font_name.clone(), std::fs::read(&path).unwrap());
 
-        //             if new_idx != idx {
-        //                 match new_idx {
-        //                     0 => node.set_impl(&mut data.backend, EmptyNode),
-        //                     1 => node.set_impl(&mut data.backend, TextureNode::new("")),
-        //                     2 => node.set_impl(
-        //                         &mut data.backend,
-        //                         TextNode::new("Rodin", 32.0, 32.0, ""),
-        //                     ),
-        //                     _ => unimplemented!(),
-        //                 }
-        //             }
+                    let _ = self
+                        .font_resources
+                        .add_font(font_name, FontResourceData { face: new_font });
+                }
+            }
+            Some(FontViewerCommand::Rename { old, new }) => {
+                data.tree.walk_tree_mut(|node| {
+                    if let Some(text) = node.downcast_mut::<TextNode<WgpuBackend>>() {
+                        if text.font_name() == old {
+                            text.set_font_name(new.clone());
+                        }
+                    }
+                });
 
-        //             if let Some(image) = node.try_downcast_mut::<TextureNode<WgpuBackend>>() {
-        //                 ui.heading("Texture Node Settings");
-        //                 ui.separator();
+                self.font_resources.rename(&old, new.clone());
+                data.backend.rename_font(&old, new);
+            }
+            None => {}
+        }
 
-        //                 egui::ComboBox::new("texture-picker", "Texture")
-        //                     .selected_text(image.texture_name())
-        //                     .show_ui(ui, |ui| {
-        //                         let mut new_texture = None;
-        //                         for texture in data.backend.iter_texture_names() {
-        //                             if ui
-        //                                 .selectable_label(image.texture_name() == texture, texture)
-        //                                 .clicked()
-        //                             {
-        //                                 new_texture = Some(texture.to_string());
-        //                                 ui.close();
-        //                                 break;
-        //                             }
-        //                         }
-
-        //                         if let Some(new_texture) = new_texture {
-        //                             image.update_texture(&mut data.backend, new_texture);
-        //                         }
-        //                     });
-        //             }
-
-        //             if let Some(text) = node.try_downcast_mut::<TextNode<WgpuBackend>>() {
-        //                 ui.heading("Text Node Settings");
-        //                 ui.separator();
-
-        //                 egui::ComboBox::new("font-picker", "Font")
-        //                     .selected_text(text.font_name())
-        //                     .show_ui(ui, |ui| {
-        //                         let mut new_font = None;
-        //                         for font in data.backend.iter_font_names() {
-        //                             if ui
-        //                                 .selectable_label(text.font_name() == font, font)
-        //                                 .clicked()
-        //                             {
-        //                                 new_font = Some(font.to_string());
-        //                                 ui.close();
-        //                                 break;
-        //                             }
-        //                         }
-
-        //                         if let Some(font) = new_font {
-        //                             text.update_font_name(&mut data.backend, font);
-        //                         }
-        //                     });
-
-        //                 ui.horizontal(|ui| {
-        //                     ui.label("Font Size");
-        //                     if ui
-        //                         .add(egui::DragValue::new(&mut text.font_size).speed(1.0))
-        //                         .changed()
-        //                     {
-        //                         text.set_dirty();
-        //                     }
-        //                 });
-
-        //                 ui.horizontal(|ui| {
-        //                     ui.label("Line Height");
-        //                     if ui
-        //                         .add(egui::DragValue::new(&mut text.line_height).speed(1.0))
-        //                         .changed()
-        //                     {
-        //                         text.set_dirty();
-        //                     }
-        //                 });
-
-        //                 ui.horizontal(|ui| {
-        //                     ui.label("Text");
-        //                     if ui.text_edit_multiline(&mut text.text).changed() {
-        //                         text.set_dirty();
-        //                     }
-        //                 });
-        //             }
-        //         }
-
-        //         frame
-        //             .wgpu_render_state()
-        //             .unwrap()
-        //             .renderer
-        //             .write()
-        //             .callback_resources
-        //             .insert(data);
-        //     });
-        // }
-
-        // egui::SidePanel::right("resource_viewer").show(ctx, |ui| {
-        //     let mut data = frame
-        //         .wgpu_render_state()
-        //         .unwrap()
-        //         .renderer
-        //         .write()
-        //         .callback_resources
-        //         .remove::<EnvyResources>()
-        //         .unwrap();
-
-        //     ui.heading("Textures");
-        //     ui.separator();
-
-        //     let mut renames = vec![];
-        //     let mut removes = vec![];
-        //     for name in data.backend.iter_texture_names() {
-        //         ui.horizontal(|ui| {
-        //             let mut new_name = name.to_string();
-        //             if ui.text_edit_singleline(&mut new_name).changed() {
-        //                 renames.push((name.to_string(), new_name));
-        //             }
-
-        //             if ui.button("Remove").clicked() {
-        //                 removes.push(name.to_string());
-        //             }
-        //         });
-        //     }
-
-        //     for (old, new) in renames {
-        //         data.backend.rename_texture(&old, new.clone());
-        //         data.tree.visit_all_nodes_mut(|node| {
-        //             if let Some(image) = node.try_downcast_mut::<TextureNode<WgpuBackend>>() {
-        //                 if image.texture_name() == old {
-        //                     image.update_texture(&mut data.backend, new.clone());
-        //                 }
-        //             }
-        //         });
-        //     }
-
-        //     for remove in removes {
-        //         data.backend.remove_texture(&remove);
-        //         data.tree.visit_all_nodes_mut(|node| {
-        //             if let Some(image) = node.try_downcast_mut::<TextureNode<WgpuBackend>>() {
-        //                 if image.texture_name() == remove {
-        //                     image.update_texture(&mut data.backend, "");
-        //                 }
-        //             }
-        //         });
-        //     }
-
-        //     if ui.button("Import Texture").clicked() {
-        //         let file = rfd::FileDialog::new()
-        //             .add_filter("PNG Images", &["png"])
-        //             .set_title("Import Texture To ENVY Layout")
-        //             .pick_file();
-
-        //         if let Some(file) = file {
-        //             let utf8_path = Utf8PathBuf::from_path_buf(file).unwrap();
-        //             let file_stem = utf8_path.file_stem().unwrap();
-        //             data.backend
-        //                 .load_textures_from_paths([(file_stem, utf8_path.as_path())]);
-        //         }
-        //     }
-
-        //     ui.heading("Fonts");
-        //     ui.separator();
-
-        //     let mut renames = vec![];
-        //     // let mut removes = vec![];
-        //     for name in data.backend.iter_font_names() {
-        //         ui.horizontal(|ui| {
-        //             let mut new_name = name.to_string();
-        //             if ui.text_edit_singleline(&mut new_name).changed() {
-        //                 renames.push((name.to_string(), new_name));
-        //             }
-        //         });
-        //     }
-
-        //     for (old, new) in renames {
-        //         data.backend.rename_font(&old, new.clone());
-        //         data.tree.visit_all_nodes_mut(|node| {
-        //             if let Some(image) = node.try_downcast_mut::<TextNode<WgpuBackend>>() {
-        //                 if image.font_name() == old {
-        //                     image.update_font_name(&mut data.backend, new.clone());
-        //                 }
-        //             }
-        //         });
-        //     }
-
-        //     if ui.button("Import Font").clicked() {
-        //         let file = rfd::FileDialog::new()
-        //             .add_filter("Font Files", &["ttf", "otf"])
-        //             .set_title("Import Font To ENVY Layout")
-        //             .pick_file();
-
-        //         if let Some(file) = file {
-        //             let file_stem = file.file_stem().unwrap().to_str().unwrap();
-        //             let bytes = std::fs::read(&file).unwrap();
-        //             data.backend.load_fonts_from_bytes([(file_stem, bytes)]);
-        //         }
-        //     }
-
-        //     frame
-        //         .wgpu_render_state()
-        //         .unwrap()
-        //         .renderer
-        //         .write()
-        //         .callback_resources
-        //         .insert(data);
-        // });
+        frame
+            .wgpu_render_state()
+            .unwrap()
+            .renderer
+            .write()
+            .callback_resources
+            .insert(data);
 
         egui::CentralPanel::default().show(ctx, |ui| {
             egui::ScrollArea::both().auto_shrink(false).show(ui, |ui| {
@@ -585,11 +618,36 @@ impl CallbackTrait for CustomPaintCallback {
         _device: &wgpu::Device,
         _queue: &wgpu::Queue,
         _screen_descriptor: &egui_wgpu::ScreenDescriptor,
-        _egui_encoder: &mut wgpu::CommandEncoder,
+        egui_encoder: &mut wgpu::CommandEncoder,
         resources: &mut egui_wgpu::CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
         let resources: &mut EnvyResources = resources.get_mut().unwrap();
         resources.prepare();
+
+        let mut rpass = egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("envy_pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &resources.render_target.create_view(&Default::default()),
+                resolve_target: Some(
+                    &resources
+                        .resolved_render_target
+                        .create_view(&Default::default()),
+                ),
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+
+        {
+            resources.backend.prep_render(&mut rpass);
+            resources.tree.render(&resources.backend, &mut rpass);
+        }
+        drop(rpass);
 
         Vec::new()
     }
@@ -660,83 +718,149 @@ struct EnvyResources {
     backend: WgpuBackend,
     tree: envy::LayoutTree<WgpuBackend>,
     icons: Icons,
+    render_target: wgpu::Texture,
+    resolved_render_target: wgpu::Texture,
+    render_target_bind_group: wgpu::BindGroup,
+    copy_texture_pipeline: wgpu::RenderPipeline,
 }
 
 impl EnvyResources {
     pub fn new(state: &egui_wgpu::RenderState) -> Self {
+        let render_target = state.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("envy_render_target"),
+            size: wgpu::Extent3d {
+                width: 1920,
+                height: 1080,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 4,
+            dimension: wgpu::TextureDimension::D2,
+            format: state.target_format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let resolved_render_target = state.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("envy_render_target"),
+            size: wgpu::Extent3d {
+                width: 1920,
+                height: 1080,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: state.target_format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+
+        let shader_module = state
+            .device
+            .create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("copy_texture_shader"),
+                source: wgpu::ShaderSource::Wgsl(include_str!("copy_texture.wgsl").into()),
+            });
+
+        let bgl = state
+            .device
+            .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("envy_copy_texture_bgl"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                ],
+            });
+
+        let layout = state
+            .device
+            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("envy_copy_texture_pipeline_layout"),
+                bind_group_layouts: &[&bgl],
+                push_constant_ranges: &[],
+            });
+
+        let pipeline = state
+            .device
+            .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("envy_copy_texture_pipeline"),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &shader_module,
+                    entry_point: None,
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    buffers: &[],
+                },
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader_module,
+                    entry_point: None,
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: state.target_format,
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::all(),
+                    })],
+                }),
+                multiview: None,
+                cache: None,
+            });
+
+        let bg = state.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("envy_copy_texture_bind_group"),
+            layout: &bgl,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Sampler(
+                        &state
+                            .device
+                            .create_sampler(&wgpu::SamplerDescriptor::default()),
+                    ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(
+                        &resolved_render_target.create_view(&Default::default()),
+                    ),
+                },
+            ],
+        });
+
         let mut backend = WgpuBackend::new(
             state.device.clone(),
             state.queue.clone(),
             state.target_format,
+            4,
         );
 
-        let animation = Animation {
-            node_animations: vec![NodeAnimation {
-                node_path: Utf8PathBuf::from("test_node"),
-                angle_channel: Some(AnimationChannel {
-                    start: 0.0,
-                    transforms: vec![AnimationTransform {
-                        duration: 240.0,
-                        end: 360.0,
-                        first_step: TransformStep::Linear,
-                        additional_steps: vec![],
-                    }],
-                }),
-            }],
-        };
-
-        let mut tree = envy::LayoutTree::new()
-            .with_child(
-                NodeItem::new(
-                    "test_node",
-                    NodeTransform::from_size(Vec2::splat(600.0)),
-                    [255; 4],
-                    ImageNode::new("icon"),
-                )
-                .with_on_update(|node: NodeDisjointAccessor<'_, WgpuBackend>| {
-                    // let mut this = node.self_mut();
-                    // this.transform_mut().angle += 1.0;
-                    // this.mark_changed();
-
-                    // let mut sibling = node.sibling_mut("test_node2").unwrap();
-
-                    // sibling.transform_mut().angle -= 1.0;
-                    // sibling.mark_changed();
-                }),
-            )
-            .with_child(NodeItem::new(
-                "test_node2",
-                NodeTransform::from_size(Vec2::splat(300.0)).with_xy(700.0, 700.0),
-                [255; 4],
-                ImageNode::new("icon"),
-            ));
-
-        backend.load_textures_from_paths([("icon", Utf8Path::new("./icon.png"))]);
-
-        tree.add_animation("test_animation", animation);
+        let mut tree = LayoutTree::new();
         tree.setup(&mut backend);
-
-        tree.play_animation("test_animation");
-
-        // let file = file::MenuFile::open("/home/blujay/.config/Ryujinx/sdcard/stratus.envy");
-        // backend.load_textures_from_bytes(
-        //     file.image_resources
-        //         .iter()
-        //         .map(|(name, bytes)| (name.as_str(), Cow::Borrowed(bytes.as_slice()))),
-        // );
-        // backend.load_fonts_from_bytes(
-        //     file.font_resources
-        //         .iter()
-        //         .map(|(name, bytes)| (name.as_str(), bytes.clone())),
-        // );
-
-        // let mut tree = file.create_tree();
-        // tree.setup(&mut backend);
 
         Self {
             backend,
             tree,
             icons: Icons::new(),
+            render_target,
+            resolved_render_target,
+            render_target_bind_group: bg,
+            copy_texture_pipeline: pipeline,
         }
     }
 
@@ -749,14 +873,16 @@ impl EnvyResources {
     }
 
     fn paint(&self, render_pass: &mut wgpu::RenderPass) {
-        self.backend.prep_render(render_pass);
-        self.tree.render(&self.backend, render_pass);
+        render_pass.set_pipeline(&self.copy_texture_pipeline);
+        render_pass.set_bind_group(0, &self.render_target_bind_group, &[]);
+        render_pass.draw(0..6, 0..1);
     }
 }
 
 static IMAGE_PNG: &'static [u8] = include_bytes!("../../icon.png");
 
 fn main() {
+    env_logger::init();
     let image = image::load(std::io::Cursor::new(IMAGE_PNG), image::ImageFormat::Png)
         .unwrap()
         .to_rgba8();

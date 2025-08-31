@@ -2,6 +2,7 @@ use camino::Utf8PathBuf;
 
 use crate::NodeTransform;
 
+#[derive(Copy, Clone, PartialEq, Eq)]
 pub enum TransformStep {
     Linear,
 }

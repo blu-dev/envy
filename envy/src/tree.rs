@@ -10,7 +10,8 @@ use crate::{
 };
 
 pub struct LayoutTree<B: EnvyBackend> {
-    animations: HashMap<String, Animation>,
+    // TODO: Should this be pub? Seems fine to provid direct access
+    pub animations: HashMap<String, Animation>,
     playing_animations: HashMap<String, f32>,
     root_children: Vec<ObservedNode<B>>,
 }
@@ -178,7 +179,35 @@ impl<B: EnvyBackend> LayoutTree<B> {
             .any(|node| node.node.name() == name)
     }
 
-    pub fn visit_roots(&self, f: impl FnMut(&NodeItem<B>)) {
+    pub fn walk_tree(&self, mut f: impl FnMut(&NodeItem<B>)) {
+        fn walk_node_recursive<B: EnvyBackend>(
+            node: &NodeItem<B>,
+            f: &mut dyn FnMut(&NodeItem<B>),
+        ) {
+            f(node);
+            node.visit_children(|child| {
+                walk_node_recursive(child, f);
+            });
+        }
+
+        self.visit_roots(|node| walk_node_recursive(node, &mut f));
+    }
+
+    pub fn walk_tree_mut(&mut self, mut f: impl FnMut(&mut NodeItem<B>)) {
+        fn walk_node_recursive<B: EnvyBackend>(
+            node: &mut NodeItem<B>,
+            f: &mut dyn FnMut(&mut NodeItem<B>),
+        ) {
+            f(node);
+            node.visit_children_mut(|child| {
+                walk_node_recursive(child, f);
+            });
+        }
+
+        self.visit_roots_mut(|node| walk_node_recursive(node, &mut f));
+    }
+
+    pub fn visit_roots<'a>(&'a self, f: impl FnMut(&'a NodeItem<B>)) {
         self.root_children.iter().map(|node| &node.node).for_each(f);
     }
 
@@ -267,5 +296,61 @@ impl<B: EnvyBackend> LayoutTree<B> {
         }
 
         Some(node)
+    }
+
+    #[must_use = "This method can fail if one or more of the nodes in the path are missing"]
+    pub fn move_node_backward_by_path(&mut self, path: impl AsRef<Utf8Path>) -> bool {
+        let path = path.as_ref();
+
+        let parent_path = match path.parent() {
+            // Special case root
+            Some(path) if matches!(path.as_str(), "/" | "") => None,
+            other => other,
+        };
+
+        // TODO: Validate that all node paths actually have a name. Not sure how to do this other than runtime checks
+        // and real error messages
+        let Some(name) = path.file_name() else {
+            return false;
+        };
+
+        match parent_path {
+            Some(parent_path) => {
+                let Some(parent_node) = self.get_node_by_path_mut(parent_path) else {
+                    return false;
+                };
+
+                parent_node.move_child_backward(name)
+            }
+            None => NodeItem::move_child_backward_impl(&mut self.root_children, name),
+        }
+    }
+
+    #[must_use = "This method can fail if one or more of the nodes in the path are missing"]
+    pub fn move_node_forward_by_path(&mut self, path: impl AsRef<Utf8Path>) -> bool {
+        let path = path.as_ref();
+
+        let parent_path = match path.parent() {
+            // Special case root
+            Some(path) if matches!(path.as_str(), "/" | "") => None,
+            other => other,
+        };
+
+        // TODO: Validate that all node paths actually have a name. Not sure how to do this other than runtime checks
+        // and real error messages
+        let Some(name) = path.file_name() else {
+            return false;
+        };
+
+        match parent_path {
+            Some(parent_path) => {
+                let Some(parent_node) = self.get_node_by_path_mut(parent_path) else {
+                    return false;
+                };
+
+                parent_node.move_child_forward(name)
+            }
+            None => NodeItem::move_child_forward_impl(&mut self.root_children, name),
+        }
     }
 }

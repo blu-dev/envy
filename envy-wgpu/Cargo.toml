@@ -13,3 +13,7 @@ image = { version = "0.25.6", default-features = false, features = ["png"] }
 indexmap = "2.11.0"
 lyon = "1.0.1"
 wgpu = "25"
+
+[features]
+default = ["asset"]
+asset = ["envy/asset"]

@@ -1,2 +1,5 @@
 [workspace]
 members = ["envy", "envy-designer", "envy-wgpu"]
+
+[workspace.package]
+edition = "2021"

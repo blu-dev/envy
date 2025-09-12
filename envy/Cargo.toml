@@ -1,7 +1,7 @@
 [package]
 name = "envy"
 version = "0.1.0"
-edition = "2024"
+edition.workspace = true
 
 [dependencies]
 bincode = { version = "2.0.1", optional = true }

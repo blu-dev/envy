@@ -29,7 +29,7 @@ impl<T> EnvyMaybeSendSync for T {}
 impl<T: Send + Sync> EnvyMaybeSendSync for T {}
 
 #[repr(align(256), C)]
-#[derive(Debug, Copy, Clone, PartialEq, Pod, Zeroable)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub struct DrawUniform {
     pub model_matrix: glam::Mat4,
     pub color: glam::Vec4,
@@ -46,6 +46,18 @@ impl DrawUniform {
             color,
             model_i_matrix: model.inverse(),
             _alignment: [0u8; 0x70],
+        }
+    }
+}
+
+unsafe impl Pod for DrawUniform {}
+unsafe impl Zeroable for DrawUniform {
+    fn zeroed() -> Self {
+        Self {
+            model_matrix: glam::Mat4::zeroed(),
+            color: glam::Vec4::zeroed(),
+            model_i_matrix: glam::Mat4::zeroed(),
+            _alignment: [0u8; 0x70]
         }
     }
 }

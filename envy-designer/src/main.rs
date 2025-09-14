@@ -197,14 +197,9 @@ impl App for EnvyDesigner {
                     }
                     ItemTreeCommand::OpenItem(path) => self.editing_node_path = Some(path),
                     ItemTreeCommand::RenameItem { id, new_name } => {
-                        if data.tree.as_layout_mut().rename_node(&id, new_name.clone()) {
-                            if self
-                                .editing_node_path
-                                .as_ref()
-                                .is_some_and(|path| *path == id)
-                            {
-                                self.editing_node_path = Some(id.with_file_name(new_name));
-                            }
+                        if data.tree.as_layout_mut().rename_node(&id, new_name.clone()) 
+                            && self.editing_node_path.as_ref().is_some_and(|path| *path == id) {
+                            self.editing_node_path = Some(id.with_file_name(new_name));
                         }
                     }
                     ItemTreeCommand::DeleteItem(path) => {
@@ -281,7 +276,7 @@ impl App for EnvyDesigner {
                         if transform.angle < 0.0 {
                             transform.angle += -(transform.angle / 360.0).floor() * 360.0;
                         }
-                        transform.angle = transform.angle % 360.0;
+                        transform.angle %= 360.0;
                         ui.end_row();
                     });
 
@@ -322,12 +317,11 @@ impl App for EnvyDesigner {
                                         node.set_implementation(text);
                                     }
                                     ui.close();
-                                } else if ui.selectable_label(false, "Sublayout").clicked() {
-                                    if !node.is::<SublayoutNode<WgpuBackend>>() {
-                                        let mut sublayout = SublayoutNode::new("", LayoutTree::new());
-                                        sublayout.setup_resources(&mut data.backend);
-                                        node.set_implementation(sublayout);
-                                    }
+                                } else if ui.selectable_label(false, "Sublayout").clicked() 
+                                    && !node.is::<SublayoutNode<WgpuBackend>>(){
+                                    let mut sublayout = SublayoutNode::new("", LayoutTree::new());
+                                    sublayout.setup_resources(&mut data.backend);
+                                    node.set_implementation(sublayout);
                                 }
                             })
                     });
@@ -368,13 +362,13 @@ impl App for EnvyDesigner {
                             ui.label("Font Size");
                             ui.add(
                                 egui::DragValue::new(&mut font_size)
-                                    .range(1.0..=std::f32::INFINITY),
+                                    .range(1.0..=f32::INFINITY),
                             );
                             ui.end_row();
                             ui.label("Line Height");
                             ui.add(
                                 egui::DragValue::new(&mut line_height)
-                                    .range(1.0..=std::f32::INFINITY),
+                                    .range(1.0..=f32::INFINITY),
                             );
                             ui.end_row();
                             text.set_font_size(font_size);

@@ -53,7 +53,7 @@ impl FontResourceViewer {
         egui::ScrollArea::vertical()
             .max_height(70.0 * 5.0)
             .show(ui, |ui| {
-                let (_id, rect) = ui.allocate_space(egui::Vec2::new(300.0, 70.0 * 5 as f32));
+                let (_id, rect) = ui.allocate_space(egui::Vec2::new(300.0, 70.0 * 5.0));
                 ui.painter().rect(
                     ui.max_rect(),
                     CornerRadius::ZERO,
@@ -148,7 +148,7 @@ impl ImageResourceViewer {
         egui::ScrollArea::vertical()
             .max_height(70.0 * 5.0)
             .show(ui, |ui| {
-                let (_id, rect) = ui.allocate_space(egui::Vec2::new(300.0, 70.0 * 5 as f32));
+                let (_id, rect) = ui.allocate_space(egui::Vec2::new(300.0, 70.0 * 5.0));
                 ui.painter().rect(
                     ui.max_rect(),
                     CornerRadius::ZERO,

@@ -100,7 +100,6 @@ impl ItemTree {
         parent_id: Id,
         children: Vec<ItemTreeNode<T>>,
         depth: usize,
-        generate_id: &mut impl FnMut() -> T,
         open_toggle_buttons: &mut Vec<(Rect, Id, T)>,
         commands: &mut Vec<ItemTreeCommand<T, U>>,
         ctx: &mut impl FnMut(&T, &mut Ui, Id) -> Option<ItemTreeCommand<T, U>>,
@@ -314,7 +313,6 @@ impl ItemTree {
                         id,
                         child.children,
                         depth + 1,
-                        generate_id,
                         open_toggle_buttons,
                         commands,
                         ctx,
@@ -346,7 +344,6 @@ impl ItemTree {
     pub fn show<T: Hash + Clone + Send + Sync + 'static, U>(
         self,
         ui: &mut Ui,
-        mut generate_id: impl FnMut() -> T,
         f: impl FnOnce(ItemTreeBuilder<'_, T>),
         mut ctx: impl FnMut(&T, &mut Ui, Id) -> Option<ItemTreeCommand<T, U>>,
     ) -> Vec<ItemTreeCommand<T, U>> {
@@ -369,7 +366,6 @@ impl ItemTree {
                 id,
                 root_children,
                 0,
-                &mut generate_id,
                 &mut toggle_buttons,
                 &mut commands,
                 &mut ctx,
@@ -464,7 +460,6 @@ pub fn show_tree_viewer<T: EnvyBackend>(
 
         item_tree.show(
             ui,
-            || todo!(),
             |mut builder| {
                 tree.visit_roots(move |node| {
                     let path = Utf8Path::new(node.name());

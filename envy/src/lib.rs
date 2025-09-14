@@ -3,6 +3,7 @@ mod animations;
 pub mod asset;
 mod backend;
 mod node;
+mod template;
 mod tree;
 
 pub use animations::{
@@ -12,7 +13,8 @@ pub use backend::{EnvyBackend, PreparedGlyph, TextLayoutArgs};
 pub use node::{
     EmptyNode, ImageNode, Node, NodeDisjointAccessor, NodeItem, NodeTransform, TextNode, SublayoutNode
 };
-pub use tree::{LayoutTree, LayoutRoot, LayoutTemplate, NodeTemplate, NodeImplTemplate};
+pub use template::{NodeImplTemplate, NodeTemplate, LayoutTemplate, TextNodeTemplate, ImageNodeTemplate, SublayoutNodeTemplate};
+pub use tree::{LayoutTree, LayoutRoot};
 
 use bytemuck::{Pod, Zeroable};
 

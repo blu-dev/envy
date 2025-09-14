@@ -1,158 +1,71 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use camino::Utf8Path;
 use glam::{Affine2, Vec2};
 
 use crate::{
-    animations::Animation, node::{Anchor, NodeParent, ObservedNode, PropagationArgs}, EmptyNode, EnvyBackend, ImageNode, Node, NodeItem, NodeTransform, SublayoutNode, TextNode
+    animations::Animation, node::{Anchor, NodeParent, ObservedNode, PropagationArgs}, template::{LayoutTemplate, NodeImplTemplate, NodeTemplate},  EnvyBackend, NodeItem, NodeTransform
 };
-
-pub enum NodeImplTemplate {
-    Empty,
-    Image {
-        texture_name: String,
-    },
-    Text {
-        font_name: String,
-        text: String,
-        font_size: f32,
-        line_height: f32,
-    },
-    Sublayout {
-        sublayout_reference: String,
-    }
-}
-
-impl NodeImplTemplate {
-    fn instantiate_node_impl<B: EnvyBackend>(&self, root: &LayoutRoot<B>) -> Box<dyn Node<B>> {
-        match self {
-            Self::Empty => Box::new(EmptyNode),
-            Self::Image { texture_name } => Box::new(ImageNode::new(texture_name)),
-            Self::Text { font_name, text, font_size, line_height } => Box::new(TextNode::new(font_name, *font_size, *line_height, text)),
-            Self::Sublayout { sublayout_reference } => Box::new(SublayoutNode::new(sublayout_reference, root.instantiate_tree_from_template(sublayout_reference).unwrap_or_else(|| {
-                panic!("Failed to instantiate sublayout {sublayout_reference} -- missing");
-            }))),
-        }
-    }
-}
-
-pub struct NodeTemplate {
-    name: String,
-    children: Vec<NodeTemplate>,
-    transform: NodeTransform,
-    color: [u8; 4],
-    node: NodeImplTemplate,
-}
-
-impl NodeTemplate {
-    pub fn new(name: impl Into<String>, transform: NodeTransform, color: [u8; 4], node: NodeImplTemplate) -> Self {
-        Self {
-            name: name.into(),
-            children: vec![],
-            transform,
-            color,
-            node,
-        }
-    }
-
-    pub fn add_child(&mut self, node: NodeTemplate) {
-        assert!(!self.children.iter().any(|other_node| node.name == other_node.name), "{} already exists as child of {}", node.name, self.name);
-
-        self.children.push(node);
-    }
-
-    pub fn name(&self) -> &str {
-        self.name.as_str()
-    }
-
-    pub fn children(&self) -> &[NodeTemplate] {
-        &self.children
-    }
-
-    pub fn transform(&self) -> NodeTransform {
-        self.transform
-    }
-
-    pub fn color(&self) -> [u8; 4] {
-        self.color
-    }
-
-    pub fn implementation(&self) -> &NodeImplTemplate {
-        &self.node
-    }
-
-    fn instantiate_node<B: EnvyBackend>(&self, root: &LayoutRoot<B>) -> NodeItem<B> {
-        let mut node = NodeItem::new_boxed(
-            &self.name,
-            self.transform,
-            self.color,
-            self.node.instantiate_node_impl(root),
-        );
-
-        for child in self.children.iter() {
-            assert!(node.add_child(child.instantiate_node(root)));
-        }
-
-        node
-    }
-}
-
-pub struct LayoutTemplate {
-    animations: HashMap<String, Animation>,
-    nodes: Vec<NodeTemplate>,
-}
-
-impl LayoutTemplate {
-    pub fn new() -> Self {
-        Self {
-            animations: HashMap::new(),
-            nodes: vec![],
-        }
-    }
-
-    pub fn root_nodes(&self) -> &[NodeTemplate] {
-        &self.nodes
-    }
-
-    pub fn animations(&self) -> &HashMap<String, Animation> {
-        &self.animations
-    }
-
-    pub fn add_root_node(&mut self, node: NodeTemplate) {
-        assert!(!self.nodes.iter().any(|other_node| node.name == other_node.name), "{} already exists in template root", node.name);
-
-        self.nodes.push(node);
-    }
-
-    pub fn add_animation(&mut self, name: impl Into<String>, animation: Animation) {
-        self.animations.insert(name.into(), animation);
-    }
-}
-
-
-impl Default for LayoutTemplate {
-    fn default() -> Self {
-        LayoutTemplate::new()
-    }
-}
 
 pub struct LayoutRoot<B: EnvyBackend> {
     root_layout: LayoutTree<B>,
+    root_template: LayoutTemplate,
     templates: HashMap<String, LayoutTemplate>,
 }
 
 impl<B: EnvyBackend> LayoutRoot<B> {
+    fn validate_template_recursive(template: &NodeTemplate, templates: &HashMap<String, LayoutTemplate>, visited_layouts: &mut HashSet<String>) {
+        if let NodeImplTemplate::Sublayout(sublayout) = &template.implementation {
+            if visited_layouts.contains(&sublayout.sublayout_name) {
+                panic!("Template {} is recursive", sublayout.sublayout_name);
+            }
+
+            visited_layouts.insert(sublayout.sublayout_name.clone());
+            let layout = templates.get(&sublayout.sublayout_name).unwrap_or_else(|| panic!("Template {} is missing", sublayout.sublayout_name));
+            for node in layout.root_nodes.iter() {
+                Self::validate_template_recursive(node, templates, visited_layouts);
+            }
+            let _ = visited_layouts.remove(&sublayout.sublayout_name);
+        }
+
+        for child in template.children.iter() {
+            Self::validate_template_recursive(child, templates, visited_layouts);
+        }
+    }
+
+    pub fn from_root_template(template: LayoutTemplate, templates: impl IntoIterator<Item = (String, LayoutTemplate)>) -> Self {
+        let mut this = Self {
+            root_layout: LayoutTree::new(),
+            root_template: template,
+            templates: templates.into_iter().collect(),
+        };
+
+        let tree = LayoutTree::from_template(&this.root_template, &this);
+        this.root_layout = tree;
+
+        let mut visited = HashSet::new();
+
+        for template in [&this.root_template].into_iter().chain(this.templates.values()) {
+            for node in template.root_nodes.iter() {
+                Self::validate_template_recursive(node, &this.templates, &mut visited);
+            }
+        }
+
+        this
+    }
+
     pub fn new() -> Self {
         Self {
             root_layout: LayoutTree::new(),
+            root_template: LayoutTemplate::default(),
             templates: HashMap::new(),
         }
     }
 
     fn validate_template_on_insert(&self, node: &NodeTemplate) {
-        if let NodeImplTemplate::Sublayout { sublayout_reference } = &node.node {
-            if !self.templates.contains_key(sublayout_reference) {
-                panic!("Sublayout template cannot reference other template which does not exist: {sublayout_reference}");
+        if let NodeImplTemplate::Sublayout(sublayout) = &node.implementation {
+            if !self.templates.contains_key(&sublayout.sublayout_name) {
+                panic!("Sublayout template cannot reference other template which does not exist: {}", sublayout.sublayout_name);
             }
         }
 
@@ -161,12 +74,16 @@ impl<B: EnvyBackend> LayoutRoot<B> {
         }
     }
 
+    pub fn root_template(&self) -> &LayoutTemplate {
+        &self.root_template
+    }
+
     pub fn templates(&self) -> impl IntoIterator<Item = (&str, &LayoutTemplate)> {
         self.templates.iter().map(|(name, template)| (name.as_str(), template))
     }
 
     pub fn add_template(&mut self, template_name: impl Into<String>, template: LayoutTemplate) {
-        for node in template.nodes.iter() {
+        for node in template.root_nodes.iter() {
             self.validate_template_on_insert(node);
         }
 
@@ -177,13 +94,13 @@ impl<B: EnvyBackend> LayoutRoot<B> {
         let template = self.templates.get(reference.as_ref())?;
 
         let mut tree = LayoutTree {
-            animations: template.animations.clone(),
+            animations: template.animations.iter().map(|(name, animation)| (name.clone(), animation.clone())).collect(),
             playing_animations: HashMap::new(),
-            root_children: Vec::with_capacity(template.nodes.len()),
+            root_children: Vec::with_capacity(template.root_nodes.len()),
         };
 
-        for node in template.nodes.iter() {
-            tree.root_children.push(ObservedNode::new(node.instantiate_node(self)));
+        for node in template.root_nodes.iter() {
+            tree.root_children.push(ObservedNode::new(NodeItem::from_template(node, self)));
         }
 
         Some(tree)
@@ -231,13 +148,20 @@ impl<B: EnvyBackend> Default for LayoutRoot<B> {
 }
 
 pub struct LayoutTree<B: EnvyBackend> {
-    // TODO: Should this be pub? Seems fine to provid direct access
-    pub animations: HashMap<String, Animation>,
+    animations: HashMap<String, Animation>,
     playing_animations: HashMap<String, f32>,
     root_children: Vec<ObservedNode<B>>,
 }
 
 impl<B: EnvyBackend> LayoutTree<B> {
+    pub fn from_template(template: &LayoutTemplate, root: &LayoutRoot<B>) -> Self {
+        Self {
+            animations: template.animations.iter().map(|(name, anim)| (name.clone(), anim.clone())).collect(),
+            playing_animations: HashMap::new(),
+            root_children: template.root_nodes.iter().map(|template| ObservedNode::new(NodeItem::from_template(template, root))).collect(),
+        }
+    }
+
     pub fn new() -> Self {
         Self {
             animations: HashMap::new(),
@@ -274,7 +198,7 @@ impl<B: EnvyBackend> LayoutTree<B> {
                 for node_anim in animation.node_animations.iter() {
                     let Some(node) = Self::get_node_by_path_mut_impl(
                         &mut self.root_children,
-                        &node_anim.node_path,
+                        Utf8Path::new(&node_anim.node_path),
                     ) else {
                         continue;
                     };
@@ -471,7 +395,7 @@ impl<B: EnvyBackend> LayoutTree<B> {
         for animation in self.animations.values_mut() {
             animation.node_animations.iter_mut().for_each(|anim| {
                 if anim.node_path == path {
-                    anim.node_path = new_path.clone();
+                    anim.node_path = new_path.to_string();
                 }
             });
         }

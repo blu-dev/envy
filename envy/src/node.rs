@@ -1,4 +1,4 @@
-use crate::{EnvyBackend, EnvyMaybeSendSync};
+use crate::{template::{NodeImplTemplate, NodeTemplate}, EnvyBackend, EnvyMaybeSendSync, LayoutRoot};
 use glam::{Affine2, Mat4, Vec2, Vec4};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -266,7 +266,7 @@ impl<B: EnvyBackend> Deref for ObservedRef<'_, B> {
     type Target = NodeItem<B>;
 
     fn deref(&self) -> &Self::Target {
-        &*self.node
+        self.node
     }
 }
 
@@ -355,10 +355,7 @@ pub(crate) enum NodeParent<'a, B: EnvyBackend> {
 
 impl<'a, B: EnvyBackend> Clone for NodeParent<'a, B> {
     fn clone(&self) -> Self {
-        match self {
-            Self::Root => Self::Root,
-            Self::Node(node) => Self::Node(node),
-        }
+        *self
     }
 }
 
@@ -372,11 +369,7 @@ pub struct NodeDisjointAccessor<'a, B: EnvyBackend> {
 
 impl<'a, B: EnvyBackend> Clone for NodeDisjointAccessor<'a, B> {
     fn clone(&self) -> Self {
-        Self {
-            parent: self.parent,
-            node_group: self.node_group,
-            idx: self.idx,
-        }
+        *self
     }
 }
 
@@ -522,6 +515,24 @@ pub struct NodeItem<B: EnvyBackend> {
 }
 
 impl<B: EnvyBackend> NodeItem<B> {
+    pub fn from_template(template: &NodeTemplate, root: &LayoutRoot<B>) -> Self {
+        Self {
+            name: template.name.clone(),
+            children: template.children.iter().map(|child| ObservedNode::new(NodeItem::from_template(child, root))).collect::<Vec<_>>(),
+            transform: template.transform,
+            color: template.color,
+            affine: Affine2::IDENTITY,
+            was_changed: true,
+            node: match &template.implementation {
+                NodeImplTemplate::Empty => Box::new(EmptyNode),
+                NodeImplTemplate::Image(image) => Box::new(ImageNode::new(&image.texture_name)),
+                NodeImplTemplate::Text(text) => Box::new(TextNode::new(&text.font_name, text.font_size, text.line_height, &text.text)),
+                NodeImplTemplate::Sublayout(sublayout) => Box::new(SublayoutNode::new(&sublayout.sublayout_name, root.instantiate_tree_from_template(&sublayout.sublayout_name).unwrap())),
+            },
+            update: vec![]
+        }
+    }
+
     pub fn new_boxed(
         name: impl Into<String>,
         transform: NodeTransform,
@@ -667,7 +678,7 @@ impl<B: EnvyBackend> NodeItem<B> {
     }
 
     #[must_use = "This method can fail if the child with the specified name was not found"]
-    pub(crate) fn move_child_backward_impl(group: &mut Vec<ObservedNode<B>>, name: &str) -> bool {
+    pub(crate) fn move_child_backward_impl(group: &mut [ObservedNode<B>], name: &str) -> bool {
         let Some(pos) = group.iter().position(|node| node.node.name.eq(name)) else {
             return false;
         };
@@ -680,7 +691,7 @@ impl<B: EnvyBackend> NodeItem<B> {
     }
 
     #[must_use = "This method can fail if the child with the specified name was not found"]
-    pub(crate) fn move_child_forward_impl(group: &mut Vec<ObservedNode<B>>, name: &str) -> bool {
+    pub(crate) fn move_child_forward_impl(group: &mut [ObservedNode<B>], name: &str) -> bool {
         let Some(pos) = group.iter().position(|node| node.node.name.eq(name)) else {
             return false;
         };

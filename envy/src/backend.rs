@@ -45,7 +45,7 @@ pub struct PreparedGlyph<R: EnvyBackend> {
 /// IMPLEMENTOR NOTE: There are some expectations when it comes to the way vertex buffers are staged
 /// - Vertex buffers for textures are assumed to have all vertices in the range of `[-0.5, 0.5]` on both axes
 /// - Vertex buffers for font glyphs are assumed that all vertices are in the range of `[-w / 2.0, w / 2.0]` and
-///     `[-h / 2.0, h / 2.0]`, where `w` and `h` are the width and height of the glyph
+///   `[-h / 2.0, h / 2.0]`, where `w` and `h` are the width and height of the glyph
 pub trait EnvyBackend: Sized + EnvyMaybeSendSync + 'static {
     /// Handle for accessing textures
     type TextureHandle: Copy + Clone + EnvyMaybeSendSync + 'static;

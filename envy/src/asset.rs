@@ -6,7 +6,7 @@ use std::{
 use bincode::{Decode, Encode};
 use camino::Utf8PathBuf;
 
-use crate::{EnvyBackend, NodeItem};
+use crate::{EnvyBackend, NodeImplTemplate, NodeItem, NodeTemplate};
 
 #[derive(Decode, Encode, Debug, Copy, Clone, PartialEq, Eq)]
 struct Version {
@@ -25,7 +25,7 @@ impl Version {
     }
 
     const fn current() -> Self {
-        Self::new(0, 1, 0)
+        Self::new(0, 1, 1)
     }
 }
 
@@ -126,10 +126,32 @@ struct TextNode {
 }
 
 #[derive(Decode, Encode)]
+enum NodeImplementationV010 {
+    Empty,
+    Image(ImageNode),
+    Text(TextNode),
+}
+
+#[derive(Decode, Encode)]
+struct NodeV010 {
+    name: String,
+    transform: NodeTransform,
+    color: [u8; 4],
+    implementation: NodeImplementationV010,
+    children: Vec<NodeV010>,
+}
+
+#[derive(Decode, Encode)]
+struct SublayoutNode {
+    sublayout_name: String,
+}
+
+#[derive(Decode, Encode)]
 enum NodeImplementation {
     Empty,
     Image(ImageNode),
     Text(TextNode),
+    Sublayout(SublayoutNode)
 }
 
 #[derive(Decode, Encode)]
@@ -139,6 +161,30 @@ struct Node {
     color: [u8; 4],
     implementation: NodeImplementation,
     children: Vec<Node>,
+}
+
+impl Node {
+    fn from_template(template: &crate::NodeTemplate) -> Self {
+        Self {
+            name: template.name().to_string(),
+            transform: template.transform().into(),
+            color: template.color(),
+            implementation: match template.implementation() {
+                NodeImplTemplate::Empty => NodeImplementation::Empty,
+                NodeImplTemplate::Image { texture_name } => NodeImplementation::Image(ImageNode { resource_name: texture_name.clone() }),
+                NodeImplTemplate::Text { font_name, text, font_size, line_height } => NodeImplementation::Text(TextNode {
+                    font_size: *font_size,
+                    line_height: *line_height,
+                    font_name: font_name.clone(),
+                    text: text.clone()
+                }),
+                NodeImplTemplate::Sublayout { sublayout_reference } => NodeImplementation::Sublayout(SublayoutNode {
+                    sublayout_name: sublayout_reference.clone()
+                })
+            },
+            children: template.children().iter().map(Node::from_template).collect(),
+        }
+    }
 }
 
 #[derive(Decode, Encode)]
@@ -287,9 +333,33 @@ impl From<Animation> for crate::animations::Animation {
 }
 
 #[derive(Decode, Encode)]
+struct Sublayout {
+    root_nodes: Vec<Node>,
+    animations: HashMap<String, Animation>,
+}
+
+impl Sublayout {
+    fn from_template(template: &crate::LayoutTemplate) -> Self {
+        Self {
+            root_nodes: template.root_nodes().iter().map(Node::from_template).collect(),
+            animations: template.animations().iter().map(|(name, anim)| (name.clone(), Animation::from(anim))).collect()
+        }
+    }
+}
+
+#[derive(Decode, Encode)]
+struct AssetV010 {
+    images: Vec<(String, Vec<u8>)>,
+    fonts: Vec<(String, Vec<u8>)>,
+    root_nodes: Vec<NodeV010>,
+    animations: HashMap<String, Animation>,
+}
+
+#[derive(Decode, Encode)]
 struct Asset {
     images: Vec<(String, Vec<u8>)>,
     fonts: Vec<(String, Vec<u8>)>,
+    sublayouts: Vec<(String, Sublayout)>,
     root_nodes: Vec<Node>,
     animations: HashMap<String, Animation>,
 }
@@ -303,7 +373,7 @@ pub trait EnvyAssetProvider {
 }
 
 pub fn serialize<B: EnvyBackend + EnvyAssetProvider>(
-    tree: &crate::LayoutTree<B>,
+    tree: &crate::LayoutRoot<B>,
     backend: &B,
 ) -> Vec<u8> {
     let mut serialized_images = HashSet::new();
@@ -312,6 +382,7 @@ pub fn serialize<B: EnvyBackend + EnvyAssetProvider>(
     let mut asset = Asset {
         images: vec![],
         fonts: vec![],
+        sublayouts: vec![],
         root_nodes: vec![],
         animations: HashMap::new(),
     };
@@ -346,6 +417,8 @@ pub fn serialize<B: EnvyBackend + EnvyAssetProvider>(
                 font_name: text.font_name().to_string(),
                 text: text.text().to_string(),
             })
+        } else if let Some(sublayout) = node.downcast::<crate::node::SublayoutNode<B>>() {
+            NodeImplementation::Sublayout(SublayoutNode { sublayout_name: sublayout.reference().into() })
         } else if node.is::<crate::node::EmptyNode>() {
             NodeImplementation::Empty
         } else {
@@ -369,7 +442,7 @@ pub fn serialize<B: EnvyBackend + EnvyAssetProvider>(
         child_node
     }
 
-    tree.visit_roots(|root| {
+    tree.as_layout().visit_roots(|root| {
         let node = visit_children_and_serialize(
             root,
             backend,
@@ -380,7 +453,12 @@ pub fn serialize<B: EnvyBackend + EnvyAssetProvider>(
         asset.root_nodes.push(node);
     });
 
+    for (name, template) in tree.templates() {
+        asset.sublayouts.push((name.to_string(), Sublayout::from_template(template)));
+    }
+
     asset.animations = tree
+        .as_layout()
         .animations
         .iter()
         .map(|(key, value)| (key.clone(), Animation::from(value)))
@@ -402,27 +480,23 @@ pub fn serialize<B: EnvyBackend + EnvyAssetProvider>(
     output.into_inner()
 }
 
-pub fn deserialize<B: EnvyBackend + EnvyAssetProvider>(
+fn deserialize_v010<B: EnvyBackend + EnvyAssetProvider>(
     backend: &mut B,
-    bytes: &[u8],
-) -> crate::LayoutTree<B> {
-    let mut reader = std::io::Cursor::new(bytes);
-    let version: Version =
-        bincode::decode_from_std_read(&mut reader, bincode::config::standard()).unwrap();
-    assert_eq!(version, Version::current());
+    reader: &mut std::io::Cursor<&[u8]>
+) -> crate::LayoutRoot<B> {
+    let mut asset: AssetV010 =
+        bincode::decode_from_std_read(reader, bincode::config::standard()).unwrap();
 
-    let mut asset: Asset =
-        bincode::decode_from_std_read(&mut reader, bincode::config::standard()).unwrap();
-
-    let mut tree = crate::LayoutTree::new();
+    let mut root = crate::LayoutRoot::new();
+    let tree = root.as_layout_mut();
 
     fn produce_children_and_deserialize<B: EnvyBackend + EnvyAssetProvider>(
-        node: Node,
+        node: NodeV010,
         images: &mut Vec<(String, Vec<u8>)>,
         fonts: &mut Vec<(String, Vec<u8>)>,
         backend: &mut B,
     ) -> NodeItem<B> {
-        let Node {
+        let NodeV010 {
             name,
             transform,
             color,
@@ -431,8 +505,8 @@ pub fn deserialize<B: EnvyBackend + EnvyAssetProvider>(
         } = node;
 
         let implementation: Box<dyn crate::node::Node<B>> = match implementation {
-            NodeImplementation::Empty => Box::new(crate::node::EmptyNode),
-            NodeImplementation::Image(image) => {
+            NodeImplementationV010::Empty => Box::new(crate::node::EmptyNode),
+            NodeImplementationV010::Image(image) => {
                 if let Some(pos) = images
                     .iter()
                     .position(|(name, _)| name.eq(&image.resource_name))
@@ -442,7 +516,7 @@ pub fn deserialize<B: EnvyBackend + EnvyAssetProvider>(
                 }
                 Box::new(crate::node::ImageNode::new(image.resource_name))
             }
-            NodeImplementation::Text(text) => {
+            NodeImplementationV010::Text(text) => {
                 if let Some(pos) = fonts.iter().position(|(name, _)| name.eq(&text.font_name)) {
                     let (name, data) = fonts.remove(pos);
                     backend.load_font_bytes_with_name(name, data);
@@ -481,5 +555,161 @@ pub fn deserialize<B: EnvyBackend + EnvyAssetProvider>(
         .map(|(name, animation)| (name, animation.into()))
         .collect();
 
-    tree
+    root
+}
+
+pub fn deserialize<B: EnvyBackend + EnvyAssetProvider>(
+    backend: &mut B,
+    bytes: &[u8],
+) -> crate::LayoutRoot<B> {
+    let mut reader = std::io::Cursor::new(bytes);
+    let version: Version =
+        bincode::decode_from_std_read(&mut reader, bincode::config::standard()).unwrap();
+
+    if version == Version::new(0, 1, 0) {
+        return deserialize_v010(backend, &mut reader);
+    }
+
+    assert_eq!(version, Version::current());
+
+    let mut asset: Asset = bincode::decode_from_std_read(&mut reader, bincode::config::standard()).unwrap();
+
+    let mut root = crate::LayoutRoot::new();
+
+    fn convert_node_to_template<B: EnvyBackend + EnvyAssetProvider>(node: Node, images: &mut Vec<(String, Vec<u8>)>, fonts: &mut Vec<(String, Vec<u8>)>, backend: &mut B) -> NodeTemplate {
+        let Node {
+            name,
+            transform,
+            color,
+            implementation,
+            children,
+        } = node;
+
+        let implementation = match implementation {
+            NodeImplementation::Empty => NodeImplTemplate::Empty,
+            NodeImplementation::Image(image) => {
+                if let Some(pos) = images
+                    .iter()
+                    .position(|(name, _)| name.eq(&image.resource_name))
+                {
+                    let (name, data) = images.remove(pos);
+                    backend.load_image_bytes_with_name(name, data);
+                }
+
+                NodeImplTemplate::Image {
+                    texture_name: image.resource_name
+                }
+            }
+            NodeImplementation::Text(text) => {
+                if let Some(pos) = fonts.iter().position(|(name, _)| name.eq(&text.font_name)) {
+                    let (name, data) = fonts.remove(pos);
+                    backend.load_font_bytes_with_name(name, data);
+                }
+                NodeImplTemplate::Text {
+                    font_name: text.font_name,
+                    font_size: text.font_size,
+                    line_height: text.line_height,
+                    text: text.text,
+                }
+            },
+            NodeImplementation::Sublayout(sublayout) => {
+                NodeImplTemplate::Sublayout { sublayout_reference: sublayout.sublayout_name }
+            }
+        };
+
+        let mut node = NodeTemplate::new(name, transform.into(), color, implementation);
+        for child in children {
+            node.add_child(convert_node_to_template(child, images, fonts, backend));
+        }
+
+        node
+
+    }
+
+    for (name, sublayout) in asset.sublayouts.into_iter() {
+        let mut template = crate::LayoutTemplate::new();
+        for (anim_name, anim) in sublayout.animations {
+            template.add_animation(anim_name, anim.into());
+        }
+
+        for node in sublayout.root_nodes {
+            template.add_root_node(convert_node_to_template(node, &mut asset.images, &mut asset.fonts, backend));
+        }
+
+        root.add_template(name, template);
+    }
+
+    fn produce_children_and_deserialize<B: EnvyBackend + EnvyAssetProvider>(
+        node: Node,
+        root: &crate::LayoutRoot<B>,
+        images: &mut Vec<(String, Vec<u8>)>,
+        fonts: &mut Vec<(String, Vec<u8>)>,
+        backend: &mut B,
+    ) -> NodeItem<B> {
+        let Node {
+            name,
+            transform,
+            color,
+            implementation,
+            children,
+        } = node;
+
+        let implementation: Box<dyn crate::node::Node<B>> = match implementation {
+            NodeImplementation::Empty => Box::new(crate::node::EmptyNode),
+            NodeImplementation::Image(image) => {
+                if let Some(pos) = images
+                    .iter()
+                    .position(|(name, _)| name.eq(&image.resource_name))
+                {
+                    let (name, data) = images.remove(pos);
+                    backend.load_image_bytes_with_name(name, data);
+                }
+                Box::new(crate::node::ImageNode::new(image.resource_name))
+            }
+            NodeImplementation::Text(text) => {
+                if let Some(pos) = fonts.iter().position(|(name, _)| name.eq(&text.font_name)) {
+                    let (name, data) = fonts.remove(pos);
+                    backend.load_font_bytes_with_name(name, data);
+                }
+                Box::new(crate::node::TextNode::new(
+                    text.font_name,
+                    text.font_size,
+                    text.line_height,
+                    text.text,
+                ))
+            },
+            NodeImplementation::Sublayout(sublayout) => {
+                let tree = root.instantiate_tree_from_template(&sublayout.sublayout_name).unwrap();
+                Box::new(crate::node::SublayoutNode::new(sublayout.sublayout_name, tree))
+            }
+        };
+
+        let mut node = NodeItem::new_boxed(name, transform.into(), color, implementation);
+        for child in children {
+            assert!(node.add_child(produce_children_and_deserialize(
+                child, root, images, fonts, backend,
+            )));
+        }
+
+        node
+    }
+
+    for root_node in asset.root_nodes {
+        let node = produce_children_and_deserialize(
+            root_node,
+            &root,
+            &mut asset.images,
+            &mut asset.fonts,
+            backend,
+        );
+        root.as_layout_mut().add_child(node);
+    }
+
+    root.as_layout_mut().animations = asset
+        .animations
+        .into_iter()
+        .map(|(name, animation)| (name, animation.into()))
+        .collect();
+
+    root
 }

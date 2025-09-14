@@ -15,6 +15,7 @@ impl TransformStep {
     }
 }
 
+#[derive(Clone)]
 pub struct AnimationChannel<T> {
     pub start: T,
     pub transforms: Vec<AnimationTransform<T>>,
@@ -29,6 +30,7 @@ impl<T> AnimationChannel<T> {
     }
 }
 
+#[derive(Clone)]
 pub struct AnimationTransform<T> {
     pub end: T,
     pub duration: f32,
@@ -36,6 +38,7 @@ pub struct AnimationTransform<T> {
     pub additional_steps: Vec<TransformStep>,
 }
 
+#[derive(Clone)]
 pub struct NodeAnimation {
     pub node_path: Utf8PathBuf,
     pub angle_channel: Option<AnimationChannel<f32>>,
@@ -76,6 +79,7 @@ impl NodeAnimation {
     }
 }
 
+#[derive(Clone)]
 pub struct Animation {
     pub node_animations: Vec<NodeAnimation>,
 }

@@ -4,10 +4,231 @@ use camino::Utf8Path;
 use glam::{Affine2, Vec2};
 
 use crate::{
-    EnvyBackend, NodeItem, NodeTransform,
-    animations::Animation,
-    node::{Anchor, NodeParent, ObservedNode, PropagationArgs},
+    animations::Animation, node::{Anchor, NodeParent, ObservedNode, PropagationArgs}, EmptyNode, EnvyBackend, ImageNode, Node, NodeItem, NodeTransform, SublayoutNode, TextNode
 };
+
+pub enum NodeImplTemplate {
+    Empty,
+    Image {
+        texture_name: String,
+    },
+    Text {
+        font_name: String,
+        text: String,
+        font_size: f32,
+        line_height: f32,
+    },
+    Sublayout {
+        sublayout_reference: String,
+    }
+}
+
+impl NodeImplTemplate {
+    fn instantiate_node_impl<B: EnvyBackend>(&self, root: &LayoutRoot<B>) -> Box<dyn Node<B>> {
+        match self {
+            Self::Empty => Box::new(EmptyNode),
+            Self::Image { texture_name } => Box::new(ImageNode::new(texture_name)),
+            Self::Text { font_name, text, font_size, line_height } => Box::new(TextNode::new(font_name, *font_size, *line_height, text)),
+            Self::Sublayout { sublayout_reference } => Box::new(SublayoutNode::new(sublayout_reference, root.instantiate_tree_from_template(sublayout_reference).unwrap_or_else(|| {
+                panic!("Failed to instantiate sublayout {sublayout_reference} -- missing");
+            }))),
+        }
+    }
+}
+
+pub struct NodeTemplate {
+    name: String,
+    children: Vec<NodeTemplate>,
+    transform: NodeTransform,
+    color: [u8; 4],
+    node: NodeImplTemplate,
+}
+
+impl NodeTemplate {
+    pub fn new(name: impl Into<String>, transform: NodeTransform, color: [u8; 4], node: NodeImplTemplate) -> Self {
+        Self {
+            name: name.into(),
+            children: vec![],
+            transform,
+            color,
+            node,
+        }
+    }
+
+    pub fn add_child(&mut self, node: NodeTemplate) {
+        assert!(!self.children.iter().any(|other_node| node.name == other_node.name), "{} already exists as child of {}", node.name, self.name);
+
+        self.children.push(node);
+    }
+
+    pub fn name(&self) -> &str {
+        self.name.as_str()
+    }
+
+    pub fn children(&self) -> &[NodeTemplate] {
+        &self.children
+    }
+
+    pub fn transform(&self) -> NodeTransform {
+        self.transform
+    }
+
+    pub fn color(&self) -> [u8; 4] {
+        self.color
+    }
+
+    pub fn implementation(&self) -> &NodeImplTemplate {
+        &self.node
+    }
+
+    fn instantiate_node<B: EnvyBackend>(&self, root: &LayoutRoot<B>) -> NodeItem<B> {
+        let mut node = NodeItem::new_boxed(
+            &self.name,
+            self.transform,
+            self.color,
+            self.node.instantiate_node_impl(root),
+        );
+
+        for child in self.children.iter() {
+            assert!(node.add_child(child.instantiate_node(root)));
+        }
+
+        node
+    }
+}
+
+pub struct LayoutTemplate {
+    animations: HashMap<String, Animation>,
+    nodes: Vec<NodeTemplate>,
+}
+
+impl LayoutTemplate {
+    pub fn new() -> Self {
+        Self {
+            animations: HashMap::new(),
+            nodes: vec![],
+        }
+    }
+
+    pub fn root_nodes(&self) -> &[NodeTemplate] {
+        &self.nodes
+    }
+
+    pub fn animations(&self) -> &HashMap<String, Animation> {
+        &self.animations
+    }
+
+    pub fn add_root_node(&mut self, node: NodeTemplate) {
+        assert!(!self.nodes.iter().any(|other_node| node.name == other_node.name), "{} already exists in template root", node.name);
+
+        self.nodes.push(node);
+    }
+
+    pub fn add_animation(&mut self, name: impl Into<String>, animation: Animation) {
+        self.animations.insert(name.into(), animation);
+    }
+}
+
+
+impl Default for LayoutTemplate {
+    fn default() -> Self {
+        LayoutTemplate::new()
+    }
+}
+
+pub struct LayoutRoot<B: EnvyBackend> {
+    root_layout: LayoutTree<B>,
+    templates: HashMap<String, LayoutTemplate>,
+}
+
+impl<B: EnvyBackend> LayoutRoot<B> {
+    pub fn new() -> Self {
+        Self {
+            root_layout: LayoutTree::new(),
+            templates: HashMap::new(),
+        }
+    }
+
+    fn validate_template_on_insert(&self, node: &NodeTemplate) {
+        if let NodeImplTemplate::Sublayout { sublayout_reference } = &node.node {
+            if !self.templates.contains_key(sublayout_reference) {
+                panic!("Sublayout template cannot reference other template which does not exist: {sublayout_reference}");
+            }
+        }
+
+        for child in node.children.iter() {
+            self.validate_template_on_insert(child);
+        }
+    }
+
+    pub fn templates(&self) -> impl IntoIterator<Item = (&str, &LayoutTemplate)> {
+        self.templates.iter().map(|(name, template)| (name.as_str(), template))
+    }
+
+    pub fn add_template(&mut self, template_name: impl Into<String>, template: LayoutTemplate) {
+        for node in template.nodes.iter() {
+            self.validate_template_on_insert(node);
+        }
+
+        self.templates.insert(template_name.into(), template);
+    }
+
+    pub fn instantiate_tree_from_template(&self, reference: impl AsRef<str>) -> Option<LayoutTree<B>> {
+        let template = self.templates.get(reference.as_ref())?;
+
+        let mut tree = LayoutTree {
+            animations: template.animations.clone(),
+            playing_animations: HashMap::new(),
+            root_children: Vec::with_capacity(template.nodes.len()),
+        };
+
+        for node in template.nodes.iter() {
+            tree.root_children.push(ObservedNode::new(node.instantiate_node(self)));
+        }
+
+        Some(tree)
+    }
+
+    pub fn as_layout(&self) -> &LayoutTree<B> {
+        &self.root_layout
+    }
+
+    pub fn as_layout_mut(&mut self) -> &mut LayoutTree<B> {
+        &mut self.root_layout
+    }
+
+    pub fn setup(&mut self, backend: &mut B) {
+        self
+            .root_layout
+            .root_children
+            .iter_mut()
+            .for_each(|child| child.node.setup(backend));
+    }
+
+    pub fn update(&mut self) {
+        NodeItem::update_batch(&mut self.root_layout.root_children, NodeParent::Root);
+    }
+
+    pub fn prepare(&mut self, backend: &mut B) {
+        self.root_layout
+            .root_children
+            .iter_mut()
+            .for_each(|child| child.node.prepare(backend));
+    }
+
+    pub fn render(&self, backend: &B, render_pass: &mut B::RenderPass<'_>) {
+        self.root_layout
+            .root_children
+            .iter()
+            .for_each(|child| child.node.render(backend, render_pass));
+    }
+}
+
+impl<B: EnvyBackend> Default for LayoutRoot<B> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 pub struct LayoutTree<B: EnvyBackend> {
     // TODO: Should this be pub? Seems fine to provid direct access
@@ -45,12 +266,6 @@ impl<B: EnvyBackend> LayoutTree<B> {
         self
     }
 
-    pub fn setup(&mut self, backend: &mut B) {
-        self.root_children
-            .iter_mut()
-            .for_each(|child| child.node.setup(backend));
-    }
-
     pub fn update_animations(&mut self) {
         self.playing_animations.retain(|key, progress| {
             *progress += 1.0;
@@ -74,8 +289,17 @@ impl<B: EnvyBackend> LayoutTree<B> {
         });
     }
 
-    pub fn update(&mut self) {
-        NodeItem::update_batch(&mut self.root_children, NodeParent::Root);
+    pub fn propagate_with_root_transform(&mut self, transform: &NodeTransform, changed: bool) {
+        let position = transform.position + -transform.anchor.as_vec() * transform.scale * transform.size;
+        let affine = Affine2::from_scale_angle_translation(transform.scale, transform.angle, position);
+
+        self.root_children.iter_mut().for_each(|child| {
+            child.node.propagate(PropagationArgs {
+                transform,
+                affine: &affine,
+                changed
+            })
+        });
     }
 
     pub fn propagate(&mut self) {
@@ -98,19 +322,7 @@ impl<B: EnvyBackend> LayoutTree<B> {
         });
     }
 
-    pub fn prepare(&mut self, backend: &mut B) {
-        self.root_children
-            .iter_mut()
-            .for_each(|child| child.node.prepare(backend));
-    }
-
-    pub fn render(&self, backend: &B, render_pass: &mut B::RenderPass<'_>) {
-        self.root_children
-            .iter()
-            .for_each(|child| child.node.render(backend, render_pass));
-    }
-
-    pub fn get_node_by_path<'a>(&'a self, path: impl AsRef<Utf8Path>) -> Option<&'a NodeItem<B>> {
+    pub fn get_node_by_path(&self, path: impl AsRef<Utf8Path>) -> Option<&NodeItem<B>> {
         fn get_node_by_path_recursive<'a, B: EnvyBackend>(
             current: &'a NodeItem<B>,
             components: &mut dyn Iterator<Item = camino::Utf8Component<'_>>,
@@ -165,10 +377,10 @@ impl<B: EnvyBackend> LayoutTree<B> {
         None
     }
 
-    pub fn get_node_by_path_mut<'a>(
-        &'a mut self,
+    pub fn get_node_by_path_mut(
+        &mut self,
         path: impl AsRef<Utf8Path>,
-    ) -> Option<&'a mut NodeItem<B>> {
+    ) -> Option<&mut NodeItem<B>> {
         Self::get_node_by_path_mut_impl(&mut self.root_children, path.as_ref())
     }
 
@@ -352,5 +564,11 @@ impl<B: EnvyBackend> LayoutTree<B> {
             }
             None => NodeItem::move_child_forward_impl(&mut self.root_children, name),
         }
+    }
+}
+
+impl<B: EnvyBackend> Default for LayoutTree<B> {
+    fn default() -> Self {
+        Self::new()
     }
 }

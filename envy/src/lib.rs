@@ -10,9 +10,9 @@ pub use animations::{
 };
 pub use backend::{EnvyBackend, PreparedGlyph, TextLayoutArgs};
 pub use node::{
-    EmptyNode, ImageNode, Node, NodeDisjointAccessor, NodeItem, NodeTransform, TextNode,
+    EmptyNode, ImageNode, Node, NodeDisjointAccessor, NodeItem, NodeTransform, TextNode, SublayoutNode
 };
-pub use tree::LayoutTree;
+pub use tree::{LayoutTree, LayoutRoot, LayoutTemplate, NodeTemplate, NodeImplTemplate};
 
 use bytemuck::{Pod, Zeroable};
 

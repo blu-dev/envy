@@ -10,9 +10,11 @@ use std::{
 
 mod image;
 mod text;
+mod sublayout;
 
 pub use image::ImageNode;
 pub use text::TextNode;
+pub use sublayout::SublayoutNode;
 
 #[doc(hidden)]
 mod __sealed {
@@ -683,7 +685,7 @@ impl<B: EnvyBackend> NodeItem<B> {
             return false;
         };
 
-        if pos + 1 <= group.len() {
+        if pos + 1 < group.len() {
             group.swap(pos, pos + 1);
         }
 
@@ -737,6 +739,10 @@ impl<B: EnvyBackend> NodeItem<B> {
                     self.transform.angle.to_radians(),
                     center,
                 );
+        }
+
+        if let Some(sublayout) = self.node.as_any_mut().downcast_mut::<SublayoutNode<B>>() {
+            sublayout.propagate_with_root_transform(&self.transform, did_change);
         }
 
         self.children.iter_mut().for_each(|child| {

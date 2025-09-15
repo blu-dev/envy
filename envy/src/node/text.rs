@@ -106,6 +106,16 @@ impl<B: EnvyBackend> Node<B> for TextNode<B> {
         }
     }
 
+    fn release_resources(&mut self, backend: &mut B) {
+        if let Some(font) = self.font.take() {
+            backend.release_font(font);
+        }
+
+        for glyph in self.glyphs.drain(..) {
+            backend.release_uniform(glyph.uniform_handle);
+        }
+    }
+
     fn prepare(&mut self, args: PreparationArgs<'_>, backend: &mut B) {
         if self.needs_compute {
             if self.font.is_none() {

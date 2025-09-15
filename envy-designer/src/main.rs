@@ -3,9 +3,9 @@ use std::{path::PathBuf, sync::Arc};
 use bytemuck::{Pod, Zeroable};
 use camino::Utf8PathBuf;
 use eframe::{App, NativeOptions};
-use egui::{IconData, Rect, ViewportBuilder};
+use egui::{epaint::ViewportInPixels, IconData, Rect, ViewportBuilder};
 use egui_wgpu::CallbackTrait;
-use envy::{EmptyNode, ImageNode, LayoutRoot, LayoutTree, Node, NodeItem, NodeTransform, SublayoutNode, TextNode};
+use envy::{EmptyNode, ImageNode, ImageNodeTemplate, LayoutRoot, LayoutTree, Node, NodeImplTemplate, NodeTemplate, NodeTransform, SublayoutNode, SublayoutNodeTemplate, TextNode, TextNodeTemplate};
 use envy_wgpu::WgpuBackend;
 
 use crate::{
@@ -172,7 +172,8 @@ impl App for EnvyDesigner {
             for command in commands {
                 match command {
                     ItemTreeCommand::NewItem { parent, new_id: _ } => {
-                        let node = data.tree.as_layout_mut().get_node_by_path_mut(&parent).unwrap();
+                        let template = data.tree.root_template_mut();
+                        let node = template.get_node_by_path_mut(&parent).unwrap();
 
                         let mut current_child_test = 0;
                         loop {
@@ -186,36 +187,44 @@ impl App for EnvyDesigner {
                                 continue;
                             }
 
-                            assert!(node.add_child(NodeItem::new(
+                            assert!(node.add_child(NodeTemplate {
                                 name,
-                                NodeTransform::default(),
-                                [255; 4],
-                                EmptyNode,
-                            )));
+                                transform: Default::default(),
+                                color: [255; 4],
+                                children: vec![],
+                                implementation: NodeImplTemplate::Empty,
+                            }));
                             break;
                         }
+
+                        data.tree.sync_root_template(&mut data.backend);
                     }
                     ItemTreeCommand::OpenItem(path) => self.editing_node_path = Some(path),
                     ItemTreeCommand::RenameItem { id, new_name } => {
-                        if data.tree.as_layout_mut().rename_node(&id, new_name.clone()) 
+                        if data.tree.root_template_mut().rename_node(&id, new_name.clone()) 
                             && self.editing_node_path.as_ref().is_some_and(|path| *path == id) {
                             self.editing_node_path = Some(id.with_file_name(new_name));
                         }
+
+                        data.tree.sync_root_template(&mut data.backend);
                     }
                     ItemTreeCommand::DeleteItem(path) => {
-                        assert!(data.tree.as_layout_mut().remove_node(&path).is_some());
+                        assert!(data.tree.root_template_mut().remove_node(&path).is_some());
+                        data.tree.sync_root_template(&mut data.backend);
                     }
                     ItemTreeCommand::UserCommand {
                         id,
                         command: TreeViewerCommand::MoveBackward,
                     } => {
                         assert!(data.tree.as_layout_mut().move_node_backward_by_path(&id));
+                        data.tree.sync_root_template(&mut data.backend);
                     }
                     ItemTreeCommand::UserCommand {
                         id,
                         command: TreeViewerCommand::MoveForward,
                     } => {
                         assert!(data.tree.as_layout_mut().move_node_forward_by_path(&id));
+                        data.tree.sync_root_template(&mut data.backend);
                     }
                     _ => {}
                 }
@@ -230,53 +239,54 @@ impl App for EnvyDesigner {
                     };
                     current_child_test += 1;
 
-                    if data.tree.as_layout().has_root(&name) {
+                    if data.tree.root_template().has_root(&name) {
                         continue;
                     }
 
-                    data.tree.as_layout_mut().add_child(NodeItem::new(
+                    data.tree.root_template_mut().add_child(NodeTemplate {
                         name,
-                        NodeTransform::default(),
-                        [255; 4],
-                        EmptyNode,
-                    ));
+                        transform: NodeTransform::default(),
+                        color: [255; 4],
+                        children: vec![],
+                        implementation: NodeImplTemplate::Empty
+                    });
                     break;
                 }
+                data.tree.sync_root_template(&mut data.backend);
             }
         });
 
-        if let Some(node) = self.editing_node_path.as_ref() {
-            if let Some(node) = data.tree.as_layout_mut().get_node_by_path_mut(node) {
+        if let Some(node_path) = self.editing_node_path.as_ref() {
+            if let Some(node) = data.tree.root_template_mut().get_node_by_path_mut(node_path) {
                 egui::SidePanel::left("node_editor").show(ctx, |ui| {
                     ui.heading("Transform");
                     ui.separator();
 
                     egui::Grid::new("transform").show(ui, |ui| {
-                        let transform = node.transform_mut();
                         ui.label("Position");
                         egui::Grid::new("position").show(ui, |ui| {
-                            ui.add(egui::DragValue::new(&mut transform.position.x).speed(1.0));
-                            ui.add(egui::DragValue::new(&mut transform.position.y).speed(1.0));
+                            ui.add(egui::DragValue::new(&mut node.transform.position.x).speed(1.0));
+                            ui.add(egui::DragValue::new(&mut node.transform.position.y).speed(1.0));
                         });
                         ui.end_row();
                         ui.label("Size");
                         egui::Grid::new("Size").show(ui, |ui| {
-                            ui.add(egui::DragValue::new(&mut transform.size.x).speed(1.0));
-                            ui.add(egui::DragValue::new(&mut transform.size.y).speed(1.0));
+                            ui.add(egui::DragValue::new(&mut node.transform.size.x).speed(1.0));
+                            ui.add(egui::DragValue::new(&mut node.transform.size.y).speed(1.0));
                         });
                         ui.end_row();
                         ui.label("Scale");
                         egui::Grid::new("scale").show(ui, |ui| {
-                            ui.add(egui::DragValue::new(&mut transform.scale.x).speed(1.0));
-                            ui.add(egui::DragValue::new(&mut transform.scale.y).speed(1.0));
+                            ui.add(egui::DragValue::new(&mut node.transform.scale.x).speed(1.0));
+                            ui.add(egui::DragValue::new(&mut node.transform.scale.y).speed(1.0));
                         });
                         ui.end_row();
                         ui.label("Rotation");
-                        ui.add(egui::DragValue::new(&mut transform.angle).speed(1.0));
-                        if transform.angle < 0.0 {
-                            transform.angle += -(transform.angle / 360.0).floor() * 360.0;
+                        ui.add(egui::DragValue::new(&mut node.transform.angle).speed(1.0));
+                        if node.transform.angle < 0.0 {
+                            node.transform.angle += -(node.transform.angle / 360.0).floor() * 360.0;
                         }
-                        transform.angle %= 360.0;
+                        node.transform.angle %= 360.0;
                         ui.end_row();
                     });
 
@@ -285,101 +295,100 @@ impl App for EnvyDesigner {
 
                     egui::Grid::new("node-kind-selector").show(ui, |ui| {
                         ui.label("Node Kind");
+                        let current = match &node.implementation {
+                            NodeImplTemplate::Empty => "Empty",
+                            NodeImplTemplate::Image(_) => "Image",
+                            NodeImplTemplate::Text(_) => "Text",
+                            NodeImplTemplate::Sublayout(_) => "Sublayout"
+                        };
+
                         egui::ComboBox::new("selector", "")
-                            .selected_text(if node.is::<EmptyNode>() {
-                                "Empty"
-                            } else if node.is::<ImageNode<WgpuBackend>>() {
-                                "Image"
-                            } else if node.is::<TextNode<WgpuBackend>>() {
-                                "Text"
-                            } else if node.is::<SublayoutNode<WgpuBackend>>() {
-                                "Sublayout"
-                            } else {
-                                unimplemented!()
-                            })
+                            .selected_text(current)
                             .show_ui(ui, |ui| {
                                 if ui.selectable_label(false, "Empty").clicked() {
-                                    if !node.is::<EmptyNode>() {
-                                        node.set_implementation(EmptyNode);
+                                    if !matches!(&node.implementation, NodeImplTemplate::Empty) {
+                                        node.implementation = NodeImplTemplate::Empty;
                                     }
                                     ui.close();
                                 } else if ui.selectable_label(false, "Image").clicked() {
-                                    if !node.is::<ImageNode<WgpuBackend>>() {
-                                        let mut image = ImageNode::new("");
-                                        image.setup_resources(&mut data.backend);
-                                        node.set_implementation(image);
+                                    if !matches!(&node.implementation, NodeImplTemplate::Image(_)) {
+                                        node.implementation = NodeImplTemplate::Image(ImageNodeTemplate {
+                                            texture_name: "".to_string(),
+                                        });
                                     }
                                     ui.close();
                                 } else if ui.selectable_label(false, "Text").clicked() {
-                                    if !node.is::<TextNode<WgpuBackend>>() {
-                                        let mut text = TextNode::new("", 32.0, 32.0, "");
-                                        text.setup_resources(&mut data.backend);
-                                        node.set_implementation(text);
+                                    if !matches!(&node.implementation, NodeImplTemplate::Text(_)) {
+                                        node.implementation = NodeImplTemplate::Text(TextNodeTemplate {
+                                            font_name: "".to_string(),
+                                            text: "".to_string(),
+                                            font_size: 32.0,
+                                            line_height: 32.0
+                                        });
                                     }
                                     ui.close();
                                 } else if ui.selectable_label(false, "Sublayout").clicked() 
-                                    && !node.is::<SublayoutNode<WgpuBackend>>(){
-                                    let mut sublayout = SublayoutNode::new("", LayoutTree::new());
-                                    sublayout.setup_resources(&mut data.backend);
-                                    node.set_implementation(sublayout);
+                                    && !matches!(&node.implementation, NodeImplTemplate::Sublayout(_)) {
+                                    node.implementation = NodeImplTemplate::Sublayout(SublayoutNodeTemplate { sublayout_name: "".to_string() });
                                 }
                             })
                     });
 
-                    if let Some(image) = node.downcast_mut::<ImageNode<WgpuBackend>>() {
-                        egui::Grid::new("image-selector").show(ui, |ui| {
+                    match &mut node.implementation {
+                        NodeImplTemplate::Empty => {},
+                        NodeImplTemplate::Image(image) => {
                             ui.label("Texture");
                             egui::ComboBox::new("texture", "")
-                                .selected_text(image.resource_name())
+                                .selected_text(&image.texture_name)
                                 .show_ui(ui, |ui| {
                                     for texture in data.backend.iter_texture_names() {
                                         if ui.selectable_label(false, texture).clicked() {
-                                            image.set_resource_name(texture);
+                                            image.texture_name = texture.to_string();
                                             ui.close();
                                             break;
                                         }
                                     }
                                 });
                             ui.end_row();
-                        });
-                    } else if let Some(text) = node.downcast_mut::<TextNode<WgpuBackend>>() {
-                        egui::Grid::new("font-selector").show(ui, |ui| {
-                            ui.label("Font");
-                            egui::ComboBox::new("font", "")
-                                .selected_text(text.font_name())
-                                .show_ui(ui, |ui| {
-                                    for font_name in data.backend.iter_font_names() {
-                                        if ui.selectable_label(false, font_name).clicked() {
-                                            text.set_font_name(font_name);
-                                            ui.close();
-                                            break;
+                        },
+                        NodeImplTemplate::Text(text) => {
+                            egui::Grid::new("font-selector").show(ui, |ui| {
+                                ui.label("Font");
+                                egui::ComboBox::new("font", "")
+                                    .selected_text(&text.font_name)
+                                    .show_ui(ui, |ui| {
+                                        for font_name in data.backend.iter_font_names() {
+                                            if ui.selectable_label(false, font_name).clicked() {
+                                                text.font_name = font_name.to_string();
+                                                ui.close();
+                                                break;
+                                            }
                                         }
-                                    }
-                                });
-                            ui.end_row();
-                            let mut font_size = text.font_size();
-                            let mut line_height = text.line_height();
-                            ui.label("Font Size");
-                            ui.add(
-                                egui::DragValue::new(&mut font_size)
-                                    .range(1.0..=f32::INFINITY),
-                            );
-                            ui.end_row();
-                            ui.label("Line Height");
-                            ui.add(
-                                egui::DragValue::new(&mut line_height)
-                                    .range(1.0..=f32::INFINITY),
-                            );
-                            ui.end_row();
-                            text.set_font_size(font_size);
-                            text.set_line_height(line_height);
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label("Text");
-                            ui.text_edit_multiline(text.text_mut());
-                        });
+                                    });
+                                ui.end_row();
+                                ui.label("Font Size");
+                                ui.add(
+                                    egui::DragValue::new(&mut text.font_size)
+                                        .range(1.0..=f32::INFINITY),
+                                );
+                                ui.end_row();
+                                ui.label("Line Height");
+                                ui.add(
+                                    egui::DragValue::new(&mut text.line_height)
+                                        .range(1.0..=f32::INFINITY),
+                                );
+                                ui.end_row();
+                            });
+                            ui.horizontal(|ui| {
+                                ui.label("Text");
+                                ui.text_edit_multiline(&mut text.text);
+                            });
+                        }
+                        NodeImplTemplate::Sublayout(_) => {}
                     }
                 });
+
+                data.tree.sync_root_template_by_path(node_path, &mut data.backend);
             }
         }
 
@@ -596,18 +605,18 @@ impl EnvyDesigner {
     }
 }
 
-fn fit_aspect_in_viewport(target_w: f32, target_h: f32, rect: Rect) -> Rect {
-    let w_frac = rect.width() / target_w;
-    let h_frac = rect.height() / target_h;
+fn fit_aspect_in_viewport(target_w: f32, target_h: f32, viewport: ViewportInPixels) -> Rect {
+    let w_frac = viewport.width_px as f32 / target_w;
+    let h_frac = viewport.height_px as f32 / target_h;
     let scale = w_frac.min(h_frac);
     let scaled_w = target_w * scale;
     let scaled_h = target_h * scale;
 
-    let x_offset = (rect.width() - scaled_w) / 2.0;
-    let y_offset = (rect.height() - scaled_h) / 2.0;
+    let x_offset = (viewport.width_px as f32 - scaled_w) / 2.0;
+    let y_offset = (viewport.height_px as f32 - scaled_h) / 2.0;
 
     Rect::from_min_size(
-        rect.min + egui::Vec2::new(x_offset, y_offset),
+        egui::Pos2::new(viewport.left_px as f32, viewport.top_px as f32) + egui::Vec2::new(x_offset, y_offset),
         egui::Vec2::new(scaled_w, scaled_h),
     )
 }
@@ -660,7 +669,7 @@ impl CallbackTrait for CustomPaintCallback {
         render_pass: &mut wgpu::RenderPass<'static>,
         resources: &egui_wgpu::CallbackResources,
     ) {
-        let rect = fit_aspect_in_viewport(1920.0, 1080.0, info.clip_rect);
+        let rect = fit_aspect_in_viewport(1920.0, 1080.0, info.clip_rect_in_pixels());
         render_pass.set_viewport(
             rect.left(),
             rect.top(),

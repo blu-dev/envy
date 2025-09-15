@@ -361,7 +361,7 @@ mod v010 {
             ));
         }
 
-        root_template.animations = asset.animations.into_iter().map(|(name, animation)| (name, animation.into())).collect();
+        root_template.animations = asset.animations.into_iter().filter(|(name, _)| !name.is_empty()).map(|(name, animation)| (name, animation.into())).collect();
 
         crate::LayoutRoot::from_root_template(root_template, [])
     }

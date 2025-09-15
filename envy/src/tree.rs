@@ -4,7 +4,7 @@ use camino::Utf8Path;
 use glam::{Affine2, Vec2};
 
 use crate::{
-    animations::Animation, node::{Anchor, NodeParent, ObservedNode, PropagationArgs}, template::{LayoutTemplate, NodeImplTemplate, NodeTemplate},  EnvyBackend, NodeItem, NodeTransform
+    animations::Animation, node::{Anchor, NodeParent, ObservedNode, PropagationArgs}, template::{LayoutTemplate, NodeImplTemplate, NodeTemplate},  EnvyBackend, NodeItem, NodeTransform, SublayoutNode
 };
 
 pub struct LayoutRoot<B: EnvyBackend> {
@@ -40,6 +40,7 @@ impl<B: EnvyBackend> LayoutRoot<B> {
             templates: templates.into_iter().collect(),
         };
 
+        this.templates.insert("".to_string(), LayoutTemplate::default());
         let tree = LayoutTree::from_template(&this.root_template, &this);
         this.root_layout = tree;
 
@@ -55,11 +56,7 @@ impl<B: EnvyBackend> LayoutRoot<B> {
     }
 
     pub fn new() -> Self {
-        Self {
-            root_layout: LayoutTree::new(),
-            root_template: LayoutTemplate::default(),
-            templates: HashMap::new(),
-        }
+        Self::from_root_template(LayoutTemplate::default(), [])
     }
 
     fn validate_template_on_insert(&self, node: &NodeTemplate) {
@@ -74,8 +71,61 @@ impl<B: EnvyBackend> LayoutRoot<B> {
         }
     }
 
+    fn sync_template_inner(tree: &mut LayoutTree<B>, template: &LayoutTemplate, templates: &HashMap<String, LayoutTemplate>, backend: &mut B) {
+        tree.visit_roots_mut(|root| root.release(backend));
+        *tree = LayoutTree::from_template_with_root_templates(template, templates);
+        tree.visit_roots_mut(|root| root.setup(backend));
+    }
+
+    fn sync_template_inner_by_path(tree: &mut LayoutTree<B>, template: &LayoutTemplate, templates: &HashMap<String, LayoutTemplate>, path: &Utf8Path, backend: &mut B) {
+        let node = tree.get_node_by_path_mut(path).unwrap();
+        let template_node = template.get_node_by_path(path).unwrap();
+        node.release(backend);
+        *node = NodeItem::from_template_with_root_templates(template_node, templates);
+        node.setup(backend);
+    }
+
+    pub fn sync_root_template(&mut self, backend: &mut B) {
+        Self::sync_template_inner(&mut self.root_layout, &self.root_template, &self.templates, backend)
+    }
+
+    pub fn sync_root_template_by_path(&mut self, path: impl AsRef<Utf8Path>, backend: &mut B) {
+        Self::sync_template_inner_by_path(&mut self.root_layout, &self.root_template, &self.templates, path.as_ref(), backend)
+    }
+
+    pub fn sync_template(&mut self, template_name: impl AsRef<str>, backend: &mut B) {
+        let name = template_name.as_ref();
+        let template = self.templates.get(name).unwrap();
+
+        self.root_layout.walk_tree_mut(|node| {
+            if let Some(sublayout) = node.downcast_mut::<SublayoutNode<B>>() {
+                if sublayout.reference() == name {
+                    Self::sync_template_inner(sublayout.as_layout_mut(), template, &self.templates, backend);
+                }
+            }
+        });
+    }
+
+    pub fn sync_template_by_path(&mut self, template_name: impl AsRef<str>, path: impl AsRef<Utf8Path>, backend: &mut B) {
+        let name = template_name.as_ref();
+        let path = path.as_ref();
+        let template = self.templates.get(name).unwrap();
+
+        self.root_layout.walk_tree_mut(|node| {
+            if let Some(sublayout) = node.downcast_mut::<SublayoutNode<B>>() {
+                if sublayout.reference() == name {
+                    Self::sync_template_inner_by_path(sublayout.as_layout_mut(), template, &self.templates, path, backend);
+                }
+            }
+        });
+    }
+
     pub fn root_template(&self) -> &LayoutTemplate {
         &self.root_template
+    }
+
+    pub fn root_template_mut(&mut self) -> &mut LayoutTemplate {
+        &mut self.root_template
     }
 
     pub fn templates(&self) -> impl IntoIterator<Item = (&str, &LayoutTemplate)> {
@@ -154,12 +204,16 @@ pub struct LayoutTree<B: EnvyBackend> {
 }
 
 impl<B: EnvyBackend> LayoutTree<B> {
-    pub fn from_template(template: &LayoutTemplate, root: &LayoutRoot<B>) -> Self {
+    pub(crate) fn from_template_with_root_templates(template: &LayoutTemplate, templates: &HashMap<String, LayoutTemplate>) -> Self {
         Self {
             animations: template.animations.iter().map(|(name, anim)| (name.clone(), anim.clone())).collect(),
             playing_animations: HashMap::new(),
-            root_children: template.root_nodes.iter().map(|template| ObservedNode::new(NodeItem::from_template(template, root))).collect(),
+            root_children: template.root_nodes.iter().map(|template| ObservedNode::new(NodeItem::from_template_with_root_templates(template, templates))).collect(),
         }
+    }
+
+    pub fn from_template(template: &LayoutTemplate, root: &LayoutRoot<B>) -> Self {
+        Self::from_template_with_root_templates(template, &root.templates)
     }
 
     pub fn new() -> Self {

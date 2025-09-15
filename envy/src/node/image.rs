@@ -69,6 +69,16 @@ impl<B: EnvyBackend> Node<B> for ImageNode<B> {
         }
     }
 
+    fn release_resources(&mut self, backend: &mut B) {
+        if let Some(uniform) = self.uniform.take() {
+            backend.release_uniform(uniform);
+        }
+
+        if let Some(texture) = self.texture.take() {
+            backend.release_texture(texture);
+        }
+    }
+
     fn prepare(&mut self, args: PreparationArgs<'_>, backend: &mut B) {
         if self.texture.is_none() {
             self.texture = backend.request_texture_by_name(&self.name);

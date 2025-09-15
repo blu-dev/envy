@@ -1,11 +1,8 @@
-use crate::{template::{NodeImplTemplate, NodeTemplate}, EnvyBackend, EnvyMaybeSendSync, LayoutRoot};
+use crate::{template::{NodeImplTemplate, NodeTemplate}, EnvyBackend, EnvyMaybeSendSync, LayoutRoot, LayoutTemplate, LayoutTree};
 use glam::{Affine2, Mat4, Vec2, Vec4};
 use serde::{Deserialize, Serialize};
 use std::{
-    any::Any,
-    marker::PhantomData,
-    ops::Deref,
-    sync::atomic::{AtomicUsize, Ordering},
+    any::Any, collections::HashMap, marker::PhantomData, ops::Deref, sync::atomic::{AtomicUsize, Ordering}
 };
 
 mod image;
@@ -51,6 +48,12 @@ pub trait Node<B: EnvyBackend>: EnvyMaybeSendSync + __sealed::Sealed + 'static {
     /// [`Node::setup_resources`]
     fn setup_resources(&mut self, backend: &mut B);
 
+    /// Releases the resources
+    ///
+    /// It is still expected that calls to this node's methods succeed even if the resources have
+    /// been released
+    fn release_resources(&mut self, backend: &mut B);
+
     /// Prepares the render resources required for this node.
     ///
     /// This should be called after propagation. It is not an error to call them out of order,
@@ -76,6 +79,8 @@ impl<B: EnvyBackend> Node<B> for EmptyNode {
     }
 
     fn setup_resources(&mut self, _: &mut B) {}
+
+    fn release_resources(&mut self, _: &mut B) {}
 
     fn prepare(&mut self, _: PreparationArgs<'_>, _: &mut B) {}
 
@@ -515,6 +520,24 @@ pub struct NodeItem<B: EnvyBackend> {
 }
 
 impl<B: EnvyBackend> NodeItem<B> {
+    pub(crate) fn from_template_with_root_templates(template: &NodeTemplate, templates: &HashMap<String, LayoutTemplate>) -> Self {
+        Self {
+            name: template.name.clone(),
+            children: template.children.iter().map(|child| ObservedNode::new(NodeItem::from_template_with_root_templates(child, templates))).collect::<Vec<_>>(),
+            transform: template.transform,
+            color: template.color,
+            affine: Affine2::IDENTITY,
+            was_changed: true,
+            node: match &template.implementation {
+                NodeImplTemplate::Empty => Box::new(EmptyNode),
+                NodeImplTemplate::Image(image) => Box::new(ImageNode::new(&image.texture_name)),
+                NodeImplTemplate::Text(text) => Box::new(TextNode::new(&text.font_name, text.font_size, text.line_height, &text.text)),
+                NodeImplTemplate::Sublayout(sublayout) => Box::new(SublayoutNode::new(&sublayout.sublayout_name, LayoutTree::from_template_with_root_templates(templates.get(&sublayout.sublayout_name).unwrap(), templates))),
+            },
+            update: vec![]
+        }
+    }
+
     pub fn from_template(template: &NodeTemplate, root: &LayoutRoot<B>) -> Self {
         Self {
             name: template.name.clone(),
@@ -733,6 +756,11 @@ impl<B: EnvyBackend> NodeItem<B> {
         self.children
             .iter_mut()
             .for_each(|child| child.node.setup(backend));
+    }
+
+    pub(crate) fn release(&mut self, backend: &mut B) {
+        self.node.release_resources(backend);
+        self.children.iter_mut().for_each(|child| child.node.release(backend));
     }
 
     pub(crate) fn propagate(&mut self, parent: PropagationArgs<'_>) {

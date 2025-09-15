@@ -45,6 +45,10 @@ impl<B: EnvyBackend> Node<B> for SublayoutNode<B> {
         self.tree.visit_roots_mut(|node| node.setup(backend));
     }
 
+    fn release_resources(&mut self, backend: &mut B) {
+        self.tree.visit_roots_mut(|node| node.release(backend));
+    }
+
     fn prepare(&mut self, _args: super::PreparationArgs<'_>, backend: &mut B) {
         self.tree.visit_roots_mut(|node| node.prepare(backend));
     }

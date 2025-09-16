@@ -4,7 +4,7 @@ use camino::Utf8Path;
 use glam::{Affine2, Vec2};
 
 use crate::{
-    animations::Animation, node::{Anchor, NodeParent, ObservedNode, PropagationArgs}, template::{LayoutTemplate, NodeImplTemplate, NodeTemplate},  EnvyBackend, NodeItem, NodeTransform, SublayoutNode
+    animations::Animation, backend, node::{Anchor, NodeParent, ObservedNode, PropagationArgs}, template::{LayoutTemplate, NodeImplTemplate, NodeTemplate}, EnvyBackend, NodeItem, NodeTransform, SublayoutNode
 };
 
 pub struct LayoutRoot<B: EnvyBackend> {
@@ -128,6 +128,14 @@ impl<B: EnvyBackend> LayoutRoot<B> {
         &mut self.root_template
     }
 
+    pub fn template(&self, name: impl AsRef<str>) -> Option<&LayoutTemplate> {
+        self.templates.get(name.as_ref())
+    }
+
+    pub fn template_mut(&mut self, name: impl AsRef<str>) -> Option<&mut LayoutTemplate> {
+        self.templates.get_mut(name.as_ref())
+    }
+
     pub fn templates(&self) -> impl IntoIterator<Item = (&str, &LayoutTemplate)> {
         self.templates.iter().map(|(name, template)| (name.as_str(), template))
     }
@@ -138,6 +146,52 @@ impl<B: EnvyBackend> LayoutRoot<B> {
         }
 
         self.templates.insert(template_name.into(), template);
+    }
+
+    fn rename_sublayout_reference(node: &mut NodeItem<B>, old_name: &str, new_name: &str) {
+        if let Some(sublayout) = node.downcast_mut::<SublayoutNode<B>>() {
+            if sublayout.reference() == old_name {
+                sublayout.set_reference_no_update(new_name);
+            } else {
+                sublayout.as_layout_mut().visit_roots_mut(|root| {
+                    Self::rename_sublayout_reference(root, old_name, new_name);
+                });
+            }
+        }
+
+        node.visit_children_mut(|child| Self::rename_sublayout_reference(child, old_name, new_name));
+    }
+
+    fn rename_sublayout_reference_in_template(node: &mut NodeTemplate, old_name: &str, new_name: &str) {
+        if let NodeImplTemplate::Sublayout(sublayout) = &mut node.implementation {
+            if sublayout.sublayout_name == old_name {
+                sublayout.sublayout_name = new_name.to_string();
+            }
+        }
+
+        for child in node.children.iter_mut() {
+            Self::rename_sublayout_reference_in_template(child, old_name, new_name);
+        }
+    }
+
+    pub fn rename_template(&mut self, old_name: impl AsRef<str>, new_name: impl Into<String>) {
+        let old = old_name.as_ref();
+        let new_name: String = new_name.into();
+        if let Some(template) = self.templates.remove(old_name.as_ref()) {
+            self.root_layout.visit_roots_mut(|root| {
+                Self::rename_sublayout_reference(root, old, &new_name);
+            });
+
+            for (name, template) in self.templates.iter_mut() {
+                if name != old {
+                    for node in template.root_nodes.iter_mut() {
+                        Self::rename_sublayout_reference_in_template(node, old, &new_name);
+                    }
+                }
+            }
+
+            self.templates.insert(new_name, template);
+        }
     }
 
     pub fn instantiate_tree_from_template(&self, reference: impl AsRef<str>) -> Option<LayoutTree<B>> {
@@ -212,6 +266,12 @@ impl<B: EnvyBackend> LayoutTree<B> {
         }
     }
 
+    pub fn sync_to_template(&mut self, template: &LayoutTemplate, root: &LayoutRoot<B>, backend: &mut B) {
+        self.visit_roots_mut(|root| root.release(backend));
+        *self = Self::from_template(template, root);
+        self.setup(backend);
+    }
+
     pub fn from_template(template: &LayoutTemplate, root: &LayoutRoot<B>) -> Self {
         Self::from_template_with_root_templates(template, &root.templates)
     }
@@ -242,6 +302,31 @@ impl<B: EnvyBackend> LayoutTree<B> {
     pub fn with_child(mut self, node: NodeItem<B>) -> Self {
         self.root_children.push(ObservedNode::new(node));
         self
+    }
+
+    pub fn setup(&mut self, backend: &mut B) {
+        self
+            .root_children
+            .iter_mut()
+            .for_each(|child| child.node.setup(backend));
+    }
+
+    pub fn update(&mut self) {
+        NodeItem::update_batch(&mut self.root_children, NodeParent::Root);
+    }
+
+    pub fn prepare(&mut self, backend: &mut B) {
+        self
+            .root_children
+            .iter_mut()
+            .for_each(|child| child.node.prepare(backend));
+    }
+
+    pub fn render(&self, backend: &B, render_pass: &mut B::RenderPass<'_>) {
+        self
+            .root_children
+            .iter()
+            .for_each(|child| child.node.render(backend, render_pass));
     }
 
     pub fn update_animations(&mut self) {

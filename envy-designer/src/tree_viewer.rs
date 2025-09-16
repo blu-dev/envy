@@ -5,7 +5,7 @@ use egui::{
     Align2, Color32, CornerRadius, DragAndDrop, FontId, Id, ImageSource, Pos2, Rect, Sense, Stroke,
     Ui, Vec2, WidgetText,
 };
-use envy::{EnvyBackend, ImageNode, LayoutTree, NodeItem, TextNode};
+use envy::{EnvyBackend, ImageNode, LayoutTemplate, LayoutTree, NodeImplTemplate, NodeItem, NodeTemplate, TextNode};
 
 use crate::Icons;
 
@@ -421,23 +421,28 @@ impl ItemTree {
     }
 }
 
-fn visit_node<T: EnvyBackend>(
-    node: &NodeItem<T>,
+fn visit_node(
+    node: &NodeTemplate,
     icons: &Icons,
     mut builder: ItemTreeBuilder<'_, Utf8PathBuf>,
     current_path: &Utf8Path,
 ) {
-    if node.is::<ImageNode<T>>() {
-        builder.set_icon(icons.texture.clone());
-    } else if node.is::<TextNode<T>>() {
-        builder.set_icon(icons.text.clone());
-    } else {
-        builder.set_icon(icons.empty.clone());
+    match &node.implementation {
+        NodeImplTemplate::Empty => {
+            builder.set_icon(icons.empty.clone());
+        },
+        NodeImplTemplate::Image(_) => {
+            builder.set_icon(icons.texture.clone());
+        },
+        NodeImplTemplate::Text(_) => {
+            builder.set_icon(icons.text.clone());
+        },
+        _ => {}
     }
 
     node.visit_children(move |node| {
-        let path = current_path.join(node.name());
-        builder.child(path.clone(), node.name(), move |builder| {
+        let path = current_path.join(&node.name);
+        builder.child(path.clone(), &node.name, move |builder| {
             visit_node(node, icons, builder, &path);
         });
     });
@@ -448,10 +453,10 @@ pub enum TreeViewerCommand {
     MoveForward,
 }
 
-pub fn show_tree_viewer<T: EnvyBackend>(
+pub fn show_tree_viewer(
     ui: &mut egui::Ui,
     icons: &super::Icons,
-    tree: &LayoutTree<T>,
+    tree: &LayoutTemplate,
 ) -> Vec<ItemTreeCommand<Utf8PathBuf, TreeViewerCommand>> {
     let item_tree = ItemTree::new(Id::new("asset_tree"));
 
@@ -462,8 +467,8 @@ pub fn show_tree_viewer<T: EnvyBackend>(
             ui,
             |mut builder| {
                 tree.visit_roots(move |node| {
-                    let path = Utf8Path::new(node.name());
-                    builder.child(path.to_path_buf(), node.name(), move |builder| {
+                    let path = Utf8Path::new(&node.name);
+                    builder.child(path.to_path_buf(), &node.name, move |builder| {
                         visit_node(node, icons, builder, path);
                     });
                 });

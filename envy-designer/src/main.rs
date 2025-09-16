@@ -1,11 +1,11 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use bytemuck::{Pod, Zeroable};
 use camino::Utf8PathBuf;
 use eframe::{App, NativeOptions};
 use egui::{epaint::ViewportInPixels, IconData, Rect, ViewportBuilder};
 use egui_wgpu::CallbackTrait;
-use envy::{EmptyNode, ImageNode, ImageNodeTemplate, LayoutRoot, LayoutTree, Node, NodeImplTemplate, NodeTemplate, NodeTransform, SublayoutNode, SublayoutNodeTemplate, TextNode, TextNodeTemplate};
+use envy::{ImageNode, ImageNodeTemplate, LayoutRoot, LayoutTemplate, LayoutTree, NodeImplTemplate, NodeTemplate, NodeTransform, SublayoutNodeTemplate, TextNode, TextNodeTemplate};
 use envy_wgpu::WgpuBackend;
 
 use crate::{
@@ -22,6 +22,8 @@ mod tree_viewer;
 pub struct EnvyDesigner {
     editing_file_path: Option<PathBuf>,
     editing_node_path: Option<Utf8PathBuf>,
+    sublayout_editing_paths: Vec<Option<Utf8PathBuf>>,
+    currently_viewing: Option<usize>,
     image_resources: ImageResourceViewer,
     font_resources: FontResourceViewer,
 }
@@ -46,11 +48,15 @@ impl EnvyDesigner {
         let mut font_viewer = FontResourceViewer::new();
         update_font_viewer_from_backend(&resources.backend, &mut font_viewer);
 
+        let sublayout_editing_paths = vec![None; resources.sublayouts.len()];
+
         egui_renderer.callback_resources.insert(resources);
 
         Some(Self {
             editing_file_path: None,
             editing_node_path: None,
+            sublayout_editing_paths,
+            currently_viewing: None,
             image_resources: viewer,
             font_resources: font_viewer,
         })
@@ -106,8 +112,9 @@ impl App for EnvyDesigner {
             ui.menu_button("File", |ui| {
                 if ui.button("New File").clicked() {
                     data.backend.clear();
-                    data.tree = LayoutRoot::new();
-                    data.tree.setup(&mut data.backend);
+                    data.root = LayoutRoot::new();
+                    data.root.setup(&mut data.backend);
+                    data.sublayouts.clear();
                     self.editing_file_path = None;
                     update_font_viewer_from_backend(&data.backend, &mut self.font_resources);
                     let state = frame.wgpu_render_state().unwrap();
@@ -125,8 +132,19 @@ impl App for EnvyDesigner {
                     if let Some(file) = file {
                         let bytes = std::fs::read(&file).unwrap();
                         data.backend.clear();
-                        data.tree = envy::asset::deserialize(&mut data.backend, &bytes);
-                        data.tree.setup(&mut data.backend);
+                        data.root = envy::asset::deserialize(&mut data.backend, &bytes);
+                        data.root.setup(&mut data.backend);
+
+                        data.sublayouts.clear();
+                        for (name, _) in data.root.templates() {
+                            let mut tree = data.root.instantiate_tree_from_template(name).unwrap();
+                            tree.setup(&mut data.backend);
+                            data.sublayouts.push((name.to_string(), tree));
+                        }
+
+                        self.sublayout_editing_paths.clear();
+                        self.sublayout_editing_paths.resize(data.sublayouts.len(), None);
+
                         self.editing_file_path = Some(file);
                         update_font_viewer_from_backend(&data.backend, &mut self.font_resources);
                         let state = frame.wgpu_render_state().unwrap();
@@ -140,14 +158,14 @@ impl App for EnvyDesigner {
                     ui.close();
                 } else if ui.button("Save File").clicked() {
                     if let Some(current) = self.editing_file_path.as_ref() {
-                        let bytes = envy::asset::serialize(&data.tree, &data.backend);
+                        let bytes = envy::asset::serialize(&data.root, &data.backend);
                         std::fs::write(current, bytes).unwrap();
                     } else {
                         let file = rfd::FileDialog::new()
                             .add_filter("ENVY Layout File", &["envy"])
                             .save_file();
                         if let Some(file) = file {
-                            let bytes = envy::asset::serialize(&data.tree, &data.backend);
+                            let bytes = envy::asset::serialize(&data.root, &data.backend);
                             std::fs::write(&file, bytes).unwrap();
                             self.editing_file_path = Some(file);
                         }
@@ -158,7 +176,7 @@ impl App for EnvyDesigner {
                         .add_filter("ENVY Layout File", &["envy"])
                         .save_file();
                     if let Some(file) = file {
-                        let bytes = envy::asset::serialize(&data.tree, &data.backend);
+                        let bytes = envy::asset::serialize(&data.root, &data.backend);
                         std::fs::write(&file, bytes).unwrap();
                         self.editing_file_path = Some(file);
                     }
@@ -167,12 +185,58 @@ impl App for EnvyDesigner {
             });
         });
 
+        egui::TopBottomPanel::top("layout-selector").show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                if ui.button("root").clicked() {
+                    self.currently_viewing = None;
+                }
+
+                for (idx, (name, _)) in data.sublayouts.iter_mut().enumerate().filter(|(_, (name, _))| !name.is_empty()) {
+                    let id = ui.id().with(idx);
+                    if let Some(mut editing) = ui.data_mut(|data| data.remove_temp::<String>(id.with("is_renaming"))) {
+                        let resp = ui.text_edit_singleline(&mut editing);
+                        if resp.lost_focus() {
+                            data.root.rename_template(name.as_str(), &editing);
+                            *name = editing;
+                        } else {
+                            ui.data_mut(|data| data.insert_temp(id.with("is_renaming"), editing));
+                        }
+                    } else {
+                        let resp = ui.button(name.as_str());
+                        if resp.clicked() {
+                            self.currently_viewing = Some(idx);
+                        }
+
+                        resp.context_menu(|ui| {
+                            if ui.button("Rename").clicked() {
+                                ui.data_mut(|data| data.insert_temp(id.with("is_renaming"), name.clone()));
+                            }
+                        });
+                    }
+                }
+
+                if ui.button("+").clicked() {
+                    data.root.add_template("new_sublayout", LayoutTemplate::default());
+                    data.sublayouts.push(("new_sublayout".to_string(), LayoutTree::new()));
+                    self.sublayout_editing_paths.push(None);
+                    self.currently_viewing = Some(data.sublayouts.len() - 1);
+                }
+            });
+        });
+
         egui::SidePanel::left("tree_viewer").show(ctx, |ui| {
-            let commands = tree_viewer::show_tree_viewer(ui, &data.icons, data.tree.as_layout());
+            let (name, editing, template) = if let Some(idx) = self.currently_viewing {
+                let name = &data.sublayouts[idx].0;
+                let template = data.root.template_mut(name).unwrap();
+                (Some(name), &mut self.sublayout_editing_paths[idx], template)
+            } else {
+                (None, &mut self.editing_node_path, data.root.root_template_mut())
+            };
+
+            let commands = tree_viewer::show_tree_viewer(ui, &data.icons, template);
             for command in commands {
                 match command {
                     ItemTreeCommand::NewItem { parent, new_id: _ } => {
-                        let template = data.tree.root_template_mut();
                         let node = template.get_node_by_path_mut(&parent).unwrap();
 
                         let mut current_child_test = 0;
@@ -196,39 +260,33 @@ impl App for EnvyDesigner {
                             }));
                             break;
                         }
-
-                        data.tree.sync_root_template(&mut data.backend);
                     }
-                    ItemTreeCommand::OpenItem(path) => self.editing_node_path = Some(path),
+                    ItemTreeCommand::OpenItem(path) => *editing = Some(path),
                     ItemTreeCommand::RenameItem { id, new_name } => {
-                        if data.tree.root_template_mut().rename_node(&id, new_name.clone()) 
-                            && self.editing_node_path.as_ref().is_some_and(|path| *path == id) {
-                            self.editing_node_path = Some(id.with_file_name(new_name));
+                        if template.rename_node(&id, new_name.clone()) 
+                            && editing.as_ref().is_some_and(|path| *path == id) {
+                            *editing = Some(id.with_file_name(new_name));
                         }
-
-                        data.tree.sync_root_template(&mut data.backend);
                     }
                     ItemTreeCommand::DeleteItem(path) => {
-                        assert!(data.tree.root_template_mut().remove_node(&path).is_some());
-                        data.tree.sync_root_template(&mut data.backend);
+                        assert!(template.remove_node(&path).is_some());
                     }
                     ItemTreeCommand::UserCommand {
                         id,
                         command: TreeViewerCommand::MoveBackward,
                     } => {
-                        assert!(data.tree.as_layout_mut().move_node_backward_by_path(&id));
-                        data.tree.sync_root_template(&mut data.backend);
+                        assert!(template.move_node_backward_by_path(&id));
                     }
                     ItemTreeCommand::UserCommand {
                         id,
                         command: TreeViewerCommand::MoveForward,
                     } => {
-                        assert!(data.tree.as_layout_mut().move_node_forward_by_path(&id));
-                        data.tree.sync_root_template(&mut data.backend);
+                        assert!(template.move_node_forward_by_path(&id));
                     }
                     _ => {}
                 }
             }
+
             if ui.button("Add New Root Node").clicked() {
                 let mut current_child_test = 0;
                 loop {
@@ -239,11 +297,11 @@ impl App for EnvyDesigner {
                     };
                     current_child_test += 1;
 
-                    if data.tree.root_template().has_root(&name) {
+                    if template.has_root(&name) {
                         continue;
                     }
 
-                    data.tree.root_template_mut().add_child(NodeTemplate {
+                    template.add_child(NodeTemplate {
                         name,
                         transform: NodeTransform::default(),
                         color: [255; 4],
@@ -252,12 +310,29 @@ impl App for EnvyDesigner {
                     });
                     break;
                 }
-                data.tree.sync_root_template(&mut data.backend);
+            }
+
+            if let Some(name) = name {
+                let idx = self.currently_viewing.unwrap();
+                let name = name.clone();
+                data.root.sync_template(&name, &mut data.backend);
+                data.sublayouts[idx].1.sync_to_template(data.root.template(&name).unwrap(), &data.root, &mut data.backend);
+            } else {
+                data.root.sync_root_template(&mut data.backend);
             }
         });
 
-        if let Some(node_path) = self.editing_node_path.as_ref() {
-            if let Some(node) = data.tree.root_template_mut().get_node_by_path_mut(node_path) {
+        let (path, template_name, template) = if let Some(idx) = self.currently_viewing {
+            let path = self.sublayout_editing_paths[idx].as_ref();
+            let template_name = &data.sublayouts[idx].0;
+            let template = data.root.template_mut(template_name).unwrap();
+            (path, Some(template_name), template)
+        } else {
+            (self.editing_node_path.as_ref(), None, data.root.root_template_mut())
+        };
+
+        if let Some(node_path) = path {
+            if let Some(node) = template.get_node_by_path_mut(node_path) {
                 egui::SidePanel::left("node_editor").show(ctx, |ui| {
                     ui.heading("Transform");
                     ui.separator();
@@ -384,11 +459,29 @@ impl App for EnvyDesigner {
                                 ui.text_edit_multiline(&mut text.text);
                             });
                         }
-                        NodeImplTemplate::Sublayout(_) => {}
+                        NodeImplTemplate::Sublayout(sublayout) => {
+                            ui.label("Sublayout");
+                            egui::ComboBox::new("sublayout", "")
+                                .selected_text(&sublayout.sublayout_name)
+                                .show_ui(ui, |ui| {
+                                    for (name, _) in data.sublayouts.iter() {
+                                        if !name.is_empty() && ui.selectable_label(false, name).clicked() {
+                                            sublayout.sublayout_name = name.to_string();
+                                            ui.close();
+                                            break;
+                                        }
+                                    }
+                                });
+                            ui.end_row();
+                        }
                     }
                 });
 
-                data.tree.sync_root_template_by_path(node_path, &mut data.backend);
+                if let Some(name) = template_name {
+                    data.root.sync_template_by_path(name, node_path, &mut data.backend);
+                } else {
+                    data.root.sync_root_template_by_path(node_path, &mut data.backend);
+                }
             }
         }
 
@@ -415,13 +508,24 @@ impl App for EnvyDesigner {
                         .free_texture(&prev.texture_id);
                 }
 
-                data.tree.as_layout_mut().walk_tree_mut(|node| {
+                data.root.as_layout_mut().walk_tree_mut(|node| {
                     if let Some(node) = node.downcast_mut::<ImageNode<WgpuBackend>>() {
                         if node.resource_name() == image_name {
                             node.invalidate_image_handle();
                         }
                     }
                 });
+
+                for (_, sublayout) in data.sublayouts.iter_mut() {
+                    sublayout.walk_tree_mut(|node| {
+                        if let Some(image) = node.downcast_mut::<ImageNode<WgpuBackend>>() {
+                            if image.resource_name() == image_name {
+                                image.invalidate_image_handle();
+                            }
+                        }
+                    })
+                }
+
                 data.backend.remove_texture(&image_name);
             }
             Some(ImageViewerCommand::Replace(image_name)) => {
@@ -491,13 +595,23 @@ impl App for EnvyDesigner {
                 }
             }
             Some(ImageViewerCommand::Rename { old, new }) => {
-                data.tree.as_layout_mut().walk_tree_mut(|node| {
+                data.root.as_layout_mut().walk_tree_mut(|node| {
                     if let Some(image) = node.downcast_mut::<ImageNode<WgpuBackend>>() {
                         if image.resource_name() == old {
                             image.set_resource_name(new.clone());
                         }
                     }
                 });
+
+                for (_, sublayout) in data.sublayouts.iter_mut() {
+                    sublayout.walk_tree_mut(|node| {
+                        if let Some(image) = node.downcast_mut::<ImageNode<WgpuBackend>>() {
+                            if image.resource_name() == old {
+                                image.set_resource_name(new.clone());
+                            }
+                        }
+                    })
+                }
 
                 self.image_resources.rename(&old, new.clone());
                 data.backend.rename_texture(&old, new);
@@ -509,13 +623,24 @@ impl App for EnvyDesigner {
             Some(FontViewerCommand::Remove(font_name)) => {
                 let _ = self.font_resources.remove(&font_name);
 
-                data.tree.as_layout_mut().walk_tree_mut(|node| {
+                data.root.as_layout_mut().walk_tree_mut(|node| {
                     if let Some(node) = node.downcast_mut::<TextNode<WgpuBackend>>() {
                         if node.font_name() == font_name {
                             node.invalidate_font_handle();
                         }
                     }
                 });
+
+                for (_, sublayout) in data.sublayouts.iter_mut() {
+                    sublayout.walk_tree_mut(|node| {
+                        if let Some(node) = node.downcast_mut::<TextNode<WgpuBackend>>() {
+                            if node.font_name() == font_name {
+                                node.invalidate_font_handle();
+                            }
+                        }
+                    })
+                }
+
                 data.backend.remove_font(&font_name);
             }
             Some(FontViewerCommand::Replace(font_name)) => {
@@ -528,13 +653,23 @@ impl App for EnvyDesigner {
                         .backend
                         .add_font(font_name.clone(), std::fs::read(&path).unwrap());
 
-                    data.tree.as_layout_mut().walk_tree_mut(|node| {
+                    data.root.as_layout_mut().walk_tree_mut(|node| {
                         if let Some(text) = node.downcast_mut::<TextNode<WgpuBackend>>() {
                             if text.font_name() == font_name {
                                 text.invalidate_font_handle();
                             }
                         }
                     });
+
+                    for (_, sublayout) in data.sublayouts.iter_mut() {
+                        sublayout.walk_tree_mut(|node| {
+                            if let Some(node) = node.downcast_mut::<TextNode<WgpuBackend>>() {
+                                if node.font_name() == font_name {
+                                    node.invalidate_font_handle();
+                                }
+                            }
+                        })
+                    }
 
                     let _ = self
                         .font_resources
@@ -559,13 +694,23 @@ impl App for EnvyDesigner {
                 }
             }
             Some(FontViewerCommand::Rename { old, new }) => {
-                data.tree.as_layout_mut().walk_tree_mut(|node| {
+                data.root.as_layout_mut().walk_tree_mut(|node| {
                     if let Some(text) = node.downcast_mut::<TextNode<WgpuBackend>>() {
                         if text.font_name() == old {
                             text.set_font_name(new.clone());
                         }
                     }
                 });
+
+                for (_, sublayout) in data.sublayouts.iter_mut() {
+                    sublayout.walk_tree_mut(|node| {
+                        if let Some(node) = node.downcast_mut::<TextNode<WgpuBackend>>() {
+                            if node.font_name() == old {
+                                node.set_font_name(new.clone());
+                            }
+                        }
+                    })
+                }
 
                 self.font_resources.rename(&old, new.clone());
                 data.backend.rename_font(&old, new);
@@ -600,7 +745,9 @@ impl EnvyDesigner {
             .with_clip_rect(rect)
             .add(egui_wgpu::Callback::new_paint_callback(
                 rect,
-                CustomPaintCallback {},
+                CustomPaintCallback {
+                    currently_viewing: self.currently_viewing
+                },
             ));
     }
 }
@@ -621,7 +768,9 @@ fn fit_aspect_in_viewport(target_w: f32, target_h: f32, viewport: ViewportInPixe
     )
 }
 
-pub struct CustomPaintCallback {}
+pub struct CustomPaintCallback {
+    currently_viewing: Option<usize>,
+}
 
 impl CallbackTrait for CustomPaintCallback {
     fn prepare(
@@ -633,7 +782,7 @@ impl CallbackTrait for CustomPaintCallback {
         resources: &mut egui_wgpu::CallbackResources,
     ) -> Vec<wgpu::CommandBuffer> {
         let resources: &mut EnvyResources = resources.get_mut().unwrap();
-        resources.prepare();
+        resources.prepare(self.currently_viewing);
 
         let mut rpass = egui_encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("envy_pass"),
@@ -654,9 +803,15 @@ impl CallbackTrait for CustomPaintCallback {
             occlusion_query_set: None,
         });
 
+        let layout = if let Some(viewing) = self.currently_viewing {
+            &resources.sublayouts[viewing].1
+        } else {
+            resources.root.as_layout()
+        };
+
         {
             resources.backend.prep_render(&mut rpass);
-            resources.tree.render(&resources.backend, &mut rpass);
+            layout.render(&resources.backend, &mut rpass);
         }
         drop(rpass);
 
@@ -727,7 +882,8 @@ impl Icons {
 
 struct EnvyResources {
     backend: WgpuBackend,
-    tree: envy::LayoutRoot<WgpuBackend>,
+    root: envy::LayoutRoot<WgpuBackend>,
+    sublayouts: Vec<(String, envy::LayoutTree<WgpuBackend>)>,
     icons: Icons,
     render_target: wgpu::Texture,
     resolved_render_target: wgpu::Texture,
@@ -861,12 +1017,18 @@ impl EnvyResources {
             4,
         );
 
-        let mut tree = LayoutRoot::new();
-        tree.setup(&mut backend);
+        let mut root = LayoutRoot::new();
+        root.setup(&mut backend);
+
+        let mut sublayouts = vec![];
+        for (name, template) in root.templates() {
+            sublayouts.push((name.to_string(), LayoutTree::from_template(template, &root)));
+        }
 
         Self {
             backend,
-            tree,
+            root,
+            sublayouts,
             icons: Icons::new(),
             render_target,
             resolved_render_target,
@@ -875,11 +1037,17 @@ impl EnvyResources {
         }
     }
 
-    fn prepare(&mut self) {
-        self.tree.as_layout_mut().update_animations();
-        self.tree.update();
-        self.tree.as_layout_mut().propagate();
-        self.tree.prepare(&mut self.backend);
+    fn prepare(&mut self, viewing: Option<usize>) {
+        let layout = if let Some(viewing) = viewing {
+            &mut self.sublayouts[viewing].1
+        } else {
+            self.root.as_layout_mut()
+        };
+
+        layout.update_animations();
+        layout.update();
+        layout.propagate();
+        layout.prepare(&mut self.backend);
         self.backend.update();
     }
 

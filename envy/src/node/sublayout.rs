@@ -13,6 +13,10 @@ impl<B: EnvyBackend> SublayoutNode<B> {
         }
     }
 
+    pub fn set_reference_no_update(&mut self, new_reference: impl Into<String>) {
+        self.reference = new_reference.into();
+    }
+
     pub fn reference(&self) -> &str {
         self.reference.as_str()
     }

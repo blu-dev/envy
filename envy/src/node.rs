@@ -766,7 +766,7 @@ impl<B: EnvyBackend> NodeItem<B> {
     pub(crate) fn propagate(&mut self, parent: PropagationArgs<'_>) {
         let did_change = self.was_changed || parent.changed;
         if did_change {
-            self.was_changed = false;
+            self.was_changed = true;
             let actual_size = self.transform.size * self.transform.scale;
             let parent_anchor_to_origin = parent.transform.size * parent.transform.anchor.as_vec();
             let self_translation = parent_anchor_to_origin + self.transform.position;
@@ -794,14 +794,17 @@ impl<B: EnvyBackend> NodeItem<B> {
     }
 
     pub(crate) fn prepare(&mut self, backend: &mut B) {
-        self.node.prepare(
-            PreparationArgs {
-                transform: &self.transform,
-                affine: &self.affine,
-                color: Vec4::from_array(self.color.map(|c| c as f32 / 255.0)),
-            },
-            backend,
-        );
+        if self.was_changed {
+            self.was_changed = false;
+            self.node.prepare(
+                PreparationArgs {
+                    transform: &self.transform,
+                    affine: &self.affine,
+                    color: Vec4::from_array(self.color.map(|c| c as f32 / 255.0)),
+                },
+                backend,
+            );
+        }
         self.children
             .iter_mut()
             .for_each(|child| child.node.prepare(backend));

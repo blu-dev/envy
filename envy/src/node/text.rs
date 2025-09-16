@@ -70,9 +70,8 @@ impl<B: EnvyBackend> TextNode<B> {
         self.text.as_str()
     }
 
-    pub fn text_mut(&mut self) -> &mut String {
-        self.needs_compute = true;
-        &mut self.text
+    pub fn set_text(&mut self, text: impl Into<String>) {
+        self.text = text.into();
     }
 
     pub fn invalidate_font_handle(&mut self) {

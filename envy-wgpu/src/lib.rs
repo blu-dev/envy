@@ -5,6 +5,7 @@ use std::{
     sync::Arc,
 };
 
+use bitvec::vec::BitVec;
 use bytemuck::{Pod, Zeroable};
 use camino::Utf8Path;
 use cosmic_text::{
@@ -63,6 +64,7 @@ struct ReservedTexture {
 struct TextureBackend {
     image_cache: IndexMap<Cow<'static, str>, wgpu::Texture>,
     textures: Vec<ReservedTexture>,
+    texture_slots: BitVec,
     texture_bgl: wgpu::BindGroupLayout,
     pipeline: wgpu::RenderPipeline,
     vertex_buffer: wgpu::Buffer,
@@ -214,6 +216,7 @@ impl TextureBackend {
         Self {
             image_cache,
             textures: vec![],
+            texture_slots: BitVec::new(),
             texture_bgl,
             pipeline: texture_pipeline,
             vertex_buffer,
@@ -517,7 +520,7 @@ impl WgpuFontBackend {
 
     pub fn layout(
         &mut self,
-        uniforms: &mut BufferVec<DrawUniform>,
+        mut new_uniform: impl FnMut() -> WgpuUniformHandle,
         args: TextLayoutArgs<'_, WgpuBackend>,
     ) -> Vec<PreparedGlyph<WgpuBackend>> {
         let face = &self.loaded_fonts[args.handle.0];
@@ -564,11 +567,9 @@ impl WgpuFontBackend {
         let mut prepared_glyphs = vec![];
         for (key, w, h, x, y) in glyphs {
             let handle = self.prepare_glyph(key, w, h);
-            let uniform_idx = uniforms.len();
-            uniforms.push(DrawUniform::new(Mat4::IDENTITY, Vec4::ONE));
             prepared_glyphs.push(PreparedGlyph {
                 glyph_handle: handle,
-                uniform_handle: WgpuUniformHandle(uniform_idx),
+                uniform_handle: new_uniform(),
                 offset_in_buffer: glam::Vec2::new(x, y),
                 size: glam::Vec2::new(w, h),
             });
@@ -631,6 +632,7 @@ pub struct WgpuBackend {
     view_buffer: wgpu::Buffer,
     draw_bgl: wgpu::BindGroupLayout,
     uniforms: BufferVec<DrawUniform>,
+    uniform_slots: BitVec,
     textures: TextureBackend,
     fonts: WgpuFontBackend,
     uniform_bind_group: Option<wgpu::BindGroup>,
@@ -713,6 +715,7 @@ impl WgpuBackend {
             view_group,
             draw_bgl,
             uniforms: BufferVec::new(wgpu::BufferUsages::UNIFORM),
+            uniform_slots: BitVec::new(),
             textures,
             fonts,
             uniform_bind_group: None,
@@ -1041,7 +1044,11 @@ impl EnvyBackend for WgpuBackend {
 
     fn request_texture_by_name(&mut self, name: impl AsRef<str>) -> Option<Self::TextureHandle> {
         let texture = self.textures.image_cache.get(name.as_ref())?.clone();
-        let sampler = self.device.create_sampler(&Default::default());
+        let sampler = self.device.create_sampler(&wgpu::SamplerDescriptor {
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
             layout: &self.textures.texture_bgl,
@@ -1065,9 +1072,16 @@ impl EnvyBackend for WgpuBackend {
             bind_group,
         };
 
-        let handle = WgpuTextureHandle(self.textures.textures.len());
-        self.textures.textures.push(texture);
-        Some(handle)
+        if let Some(first_available) = self.textures.texture_slots.first_zero() {
+            self.textures.texture_slots.set(first_available, true);
+            self.textures.textures[first_available] = texture;
+            Some(WgpuTextureHandle(first_available))
+        } else {
+            let handle = WgpuTextureHandle(self.textures.textures.len());
+            self.textures.texture_slots.push(true);
+            self.textures.textures.push(texture);
+            Some(handle)
+        }
     }
 
     fn request_font_by_name(&mut self, name: impl AsRef<str>) -> Option<Self::FontHandle> {
@@ -1078,11 +1092,15 @@ impl EnvyBackend for WgpuBackend {
     }
 
     fn request_new_uniform(&mut self) -> Option<Self::UniformHandle> {
-        let handle = WgpuUniformHandle(self.uniforms.len());
-        self.uniforms
-            .push(DrawUniform::new(glam::Mat4::IDENTITY, glam::Vec4::ONE));
-
-        Some(handle)
+        if let Some(first_available) = self.uniform_slots.first_zero() {
+            self.uniform_slots.set(first_available, true);
+            Some(WgpuUniformHandle(first_available))
+        } else {
+            let len = self.uniforms.len();
+            self.uniform_slots.push(true);
+            self.uniforms.push(DrawUniform::new(glam::Mat4::IDENTITY, glam::Vec4::ONE));
+            Some(WgpuUniformHandle(len))
+        }
     }
 
     fn update_uniform(&mut self, uniform: Self::UniformHandle, data: crate::DrawUniform) {
@@ -1090,7 +1108,17 @@ impl EnvyBackend for WgpuBackend {
     }
 
     fn layout_text(&mut self, args: TextLayoutArgs<'_, Self>) -> Vec<PreparedGlyph<Self>> {
-        self.fonts.layout(&mut self.uniforms, args)
+        self.fonts.layout(|| {
+            if let Some(first_available) = self.uniform_slots.first_zero() {
+                self.uniform_slots.set(first_available, true);
+                WgpuUniformHandle(first_available)
+            } else {
+                let len = self.uniforms.len();
+                self.uniform_slots.push(true);
+                self.uniforms.push(DrawUniform::new(glam::Mat4::IDENTITY, glam::Vec4::ONE));
+                WgpuUniformHandle(len)
+            }
+        }, args)
     }
 
     fn draw_texture(
@@ -1147,11 +1175,15 @@ impl EnvyBackend for WgpuBackend {
         }
     }
 
-    fn release_font(&mut self, handle: Self::FontHandle) {}
+    fn release_font(&mut self, _handle: Self::FontHandle) {}
 
-    fn release_texture(&mut self, handle: Self::TextureHandle) {}
+    fn release_texture(&mut self, handle: Self::TextureHandle) {
+        self.textures.texture_slots.set(handle.0, false);
+    }
 
-    fn release_uniform(&mut self, handle: Self::UniformHandle) {}
+    fn release_uniform(&mut self, handle: Self::UniformHandle) {
+        self.uniform_slots.set(handle.0, false);
+    }
 
     // fn update_texture_by_name(&mut self, handle: Self::TextureHandle, name: impl AsRef<str>) {
     //     let Some(texture) = self.textures.image_cache.get(name.as_ref()).cloned() else {

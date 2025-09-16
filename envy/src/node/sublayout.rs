@@ -1,3 +1,5 @@
+use glam::Affine2;
+
 use crate::{EnvyBackend, LayoutTree, Node, NodeTransform};
 
 pub struct SublayoutNode<B: EnvyBackend> {
@@ -29,8 +31,8 @@ impl<B: EnvyBackend> SublayoutNode<B> {
         &mut self.tree
     }
 
-    pub(crate) fn propagate_with_root_transform(&mut self, transform: &NodeTransform, changed: bool) {
-        self.tree.propagate_with_root_transform(transform, changed);
+    pub(crate) fn propagate_with_root_transform(&mut self, transform: &NodeTransform, affine: &Affine2, changed: bool) {
+        self.tree.propagate_with_root_transform(transform, affine, changed);
     }
 }
 

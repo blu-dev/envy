@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc};
 
 use bytemuck::{Pod, Zeroable};
 use camino::Utf8PathBuf;
@@ -363,6 +363,9 @@ impl App for EnvyDesigner {
                         }
                         node.transform.angle %= 360.0;
                         ui.end_row();
+                        ui.label("Color");
+                        ui.color_edit_button_srgba_unmultiplied(&mut node.color);
+                        ui.end_row();
                     });
 
                     ui.heading("Node Implementation");
@@ -718,15 +721,32 @@ impl App for EnvyDesigner {
             None => {}
         }
 
-        frame
-            .wgpu_render_state()
-            .unwrap()
-            .renderer
-            .write()
-            .callback_resources
-            .insert(data);
-
         egui::CentralPanel::default().show(ctx, |ui| {
+            let template = if let Some(current) = self.currently_viewing {
+                let name = &data.sublayouts[current].0;
+                data.root.template_mut(name).unwrap()
+            } else {
+                data.root.root_template_mut()
+            };
+
+            egui::Grid::new("canvas size")
+                .show(ui, |ui| {
+                    ui.label("Canvas Size");
+                    egui::Grid::new("vec")
+                        .show(ui, |ui| {
+                            ui.add(egui::DragValue::new(&mut template.canvas_size[0]));
+                            ui.add(egui::DragValue::new(&mut template.canvas_size[1]));
+                        });
+                });
+
+            frame
+                .wgpu_render_state()
+                .unwrap()
+                .renderer
+                .write()
+                .callback_resources
+                .insert(data);
+
             egui::ScrollArea::both().auto_shrink(false).show(ui, |ui| {
                 egui::Frame::canvas(ui.style()).show(ui, |ui| {
                     self.custom_painting(ui);

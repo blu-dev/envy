@@ -24,7 +24,7 @@ impl Version {
     }
 
     const fn current() -> Self {
-        Self::new(0, 2, 0)
+        Self::new(0, 2, 1)
     }
 }
 
@@ -367,6 +367,59 @@ mod v010 {
     }
 }
 
+mod v020 {
+    use super::*;
+    use std::io::Cursor;
+
+    use crate::{template::NodeTemplate, animations::Animation};
+    #[derive(bincode::Encode, bincode::Decode)]
+    struct LayoutTemplate {
+        root_nodes: Vec<NodeTemplate>,
+        animations: Vec<(String, Animation)>,
+    }
+
+    impl From<LayoutTemplate> for crate::LayoutTemplate {
+        fn from(value: LayoutTemplate) -> Self {
+            Self {
+                canvas_size: [1920, 1080],
+                root_nodes: value.root_nodes,
+                animations: value.animations,
+            }
+        }
+    }
+
+    #[derive(Decode, Encode)]
+    struct Asset {
+        images: Vec<(String, Vec<u8>)>,
+        fonts: Vec<(String, Vec<u8>)>,
+        templates: Vec<(String, LayoutTemplate)>,
+        root_template: LayoutTemplate,
+    }
+
+    pub(super) fn deserialize<B: EnvyBackend + EnvyAssetProvider>(
+        backend: &mut B,
+        reader: &mut Cursor<&[u8]>
+    ) -> crate::LayoutRoot<B> {
+        let asset: Asset = bincode::decode_from_std_read(reader, bincode::config::standard()).unwrap();
+
+        let root_template = crate::LayoutTemplate::from(asset.root_template);
+
+        let templates = asset.templates.into_iter().map(|(name, template)| (name, crate::LayoutTemplate::from(template)));
+
+        let root = crate::LayoutRoot::from_root_template(root_template, templates);
+
+        for (image, bytes) in asset.images {
+            backend.load_image_bytes_with_name(image, bytes);
+        }
+
+        for (font, bytes) in asset.fonts {
+            backend.load_font_bytes_with_name(font, bytes);
+        }
+
+        root
+    }
+}
+
 #[derive(Decode, Encode)]
 struct Asset {
     images: Vec<(String, Vec<u8>)>,
@@ -439,6 +492,8 @@ pub fn deserialize<B: EnvyBackend + EnvyAssetProvider>(
 
     if version == Version::new(0, 1, 0) {
         return v010::deserialize(backend, &mut reader);
+    } else if version == Version::new(0, 2, 0) {
+        return v020::deserialize(backend, &mut reader);
     }
 
     assert_eq!(version, Version::current());

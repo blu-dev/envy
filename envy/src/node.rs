@@ -781,7 +781,7 @@ impl<B: EnvyBackend> NodeItem<B> {
         }
 
         if let Some(sublayout) = self.node.as_any_mut().downcast_mut::<SublayoutNode<B>>() {
-            sublayout.propagate_with_root_transform(&self.transform, did_change);
+            sublayout.propagate_with_root_transform(&self.transform, &self.affine, did_change);
         }
 
         self.children.iter_mut().for_each(|child| {

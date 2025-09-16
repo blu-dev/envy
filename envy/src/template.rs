@@ -276,6 +276,7 @@ const _: () = {
 #[cfg_attr(feature = "asset", derive(bincode::Encode, bincode::Decode))]
 #[derive(Default, Clone)]
 pub struct LayoutTemplate {
+    pub canvas_size: [u32; 2],
     pub root_nodes: Vec<NodeTemplate>,
     pub animations: Vec<(String, Animation)>,
 }

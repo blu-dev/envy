@@ -198,6 +198,7 @@ impl<B: EnvyBackend> LayoutRoot<B> {
         let template = self.templates.get(reference.as_ref())?;
 
         let mut tree = LayoutTree {
+            canvas_size: template.canvas_size.into(),
             animations: template.animations.iter().map(|(name, animation)| (name.clone(), animation.clone())).collect(),
             playing_animations: HashMap::new(),
             root_children: Vec::with_capacity(template.root_nodes.len()),
@@ -252,6 +253,7 @@ impl<B: EnvyBackend> Default for LayoutRoot<B> {
 }
 
 pub struct LayoutTree<B: EnvyBackend> {
+    canvas_size: glam::UVec2,
     animations: HashMap<String, Animation>,
     playing_animations: HashMap<String, f32>,
     root_children: Vec<ObservedNode<B>>,
@@ -260,6 +262,7 @@ pub struct LayoutTree<B: EnvyBackend> {
 impl<B: EnvyBackend> LayoutTree<B> {
     pub(crate) fn from_template_with_root_templates(template: &LayoutTemplate, templates: &HashMap<String, LayoutTemplate>) -> Self {
         Self {
+            canvas_size: template.canvas_size.into(),
             animations: template.animations.iter().map(|(name, anim)| (name.clone(), anim.clone())).collect(),
             playing_animations: HashMap::new(),
             root_children: template.root_nodes.iter().map(|template| ObservedNode::new(NodeItem::from_template_with_root_templates(template, templates))).collect(),
@@ -278,6 +281,7 @@ impl<B: EnvyBackend> LayoutTree<B> {
 
     pub fn new() -> Self {
         Self {
+            canvas_size: glam::UVec2::new(1920, 1080),
             animations: HashMap::new(),
             playing_animations: HashMap::new(),
             root_children: vec![],
@@ -352,9 +356,14 @@ impl<B: EnvyBackend> LayoutTree<B> {
         });
     }
 
-    pub fn propagate_with_root_transform(&mut self, transform: &NodeTransform, changed: bool) {
-        let position = transform.position + -transform.anchor.as_vec() * transform.scale * transform.size;
-        let affine = Affine2::from_scale_angle_translation(transform.scale, transform.angle, position);
+    pub fn propagate_with_root_transform(&mut self, transform: &NodeTransform, affine: &Affine2, changed: bool) {
+        let this_scale = transform.scale * transform.size / self.canvas_size.as_vec2();
+        let actual_size = transform.size * this_scale;
+
+        let parent_anchor_to_origin = transform.size * transform.anchor.as_vec();
+        let self_translation = parent_anchor_to_origin;
+        let center = self_translation + -transform.anchor.as_vec() * actual_size;
+        let affine = *affine * Affine2::from_scale_angle_translation(this_scale, transform.angle.to_radians(), center);
 
         self.root_children.iter_mut().for_each(|child| {
             child.node.propagate(PropagationArgs {
@@ -366,10 +375,10 @@ impl<B: EnvyBackend> LayoutTree<B> {
     }
 
     pub fn propagate(&mut self) {
-        const TRANSFORM: NodeTransform = NodeTransform {
+        let transform = NodeTransform {
             angle: 0.0,
-            position: Vec2::new(960.0, 540.0),
-            size: Vec2::new(1920.0, 1080.0),
+            position: self.canvas_size.as_vec2() / 2.0,
+            size: self.canvas_size.as_vec2(),
             scale: Vec2::ONE,
             anchor: Anchor::Center,
         };
@@ -378,7 +387,7 @@ impl<B: EnvyBackend> LayoutTree<B> {
 
         self.root_children.iter_mut().for_each(|child| {
             child.node.propagate(PropagationArgs {
-                transform: &TRANSFORM,
+                transform: &transform,
                 affine: &AFFINE,
                 changed: false,
             });

@@ -530,7 +530,11 @@ impl<B: EnvyBackend> NodeItem<B> {
             was_changed: true,
             node: match &template.implementation {
                 NodeImplTemplate::Empty => Box::new(EmptyNode),
-                NodeImplTemplate::Image(image) => Box::new(ImageNode::new(&image.texture_name)),
+                NodeImplTemplate::Image(image) => {
+                    let mut node = ImageNode::new(&image.texture_name);
+                    node.set_mask_texture_name(image.mask_texture_name.clone());
+                    Box::new(node)
+                },
                 NodeImplTemplate::Text(text) => Box::new(TextNode::new(&text.font_name, text.font_size, text.line_height, &text.text)),
                 NodeImplTemplate::Sublayout(sublayout) => Box::new(SublayoutNode::new(&sublayout.sublayout_name, LayoutTree::from_template_with_root_templates(templates.get(&sublayout.sublayout_name).unwrap(), templates))),
             },
@@ -604,6 +608,10 @@ impl<B: EnvyBackend> NodeItem<B> {
         self.color
     }
 
+    pub fn color_mut(&mut self) -> &mut [u8; 4] {
+        &mut self.color
+    }
+
     pub fn with_on_update(mut self, callback: impl NodeUpdateCallback<B>) -> Self {
         self.update.push(Box::new(callback));
         self
@@ -629,12 +637,52 @@ impl<B: EnvyBackend> NodeItem<B> {
         self.node.as_any_mut().downcast_mut::<T>()
     }
 
+    #[track_caller]
+    pub fn as_image(&self) -> &ImageNode<B> {
+        self.downcast::<ImageNode<B>>().unwrap()
+    }
+
+    #[track_caller]
+    pub fn as_text(&self) -> &TextNode<B> {
+        self.downcast::<TextNode<B>>().unwrap()
+    }
+
+    #[track_caller]
+    pub fn as_sublayout(&self) -> &SublayoutNode<B> {
+        self.downcast::<SublayoutNode<B>>().unwrap()
+    }
+
+    #[track_caller]
+    pub fn as_image_mut(&mut self) -> &mut ImageNode<B> {
+        self.downcast_mut::<ImageNode<B>>().unwrap()
+    }
+
+    #[track_caller]
+    pub fn as_text_mut(&mut self) -> &mut TextNode<B> {
+        self.downcast_mut::<TextNode<B>>().unwrap()
+    }
+
+    #[track_caller]
+    pub fn as_sublayout_mut(&mut self) -> &mut SublayoutNode<B> {
+        self.downcast_mut::<SublayoutNode<B>>().unwrap()
+    }
+
     pub fn has_child(&self, name: impl AsRef<str>) -> bool {
         let name = name.as_ref();
         self.children.iter().any(|child| child.node.name.eq(name))
     }
 
-    pub fn child(&self, name: impl AsRef<str>) -> Option<&NodeItem<B>> {
+    #[track_caller]
+    pub fn child(&self, name: impl AsRef<str>) -> &NodeItem<B> {
+        self.get_child(name).unwrap()
+    }
+
+    #[track_caller]
+    pub fn child_mut(&mut self, name: impl AsRef<str>) -> &mut NodeItem<B> {
+        self.get_child_mut(name).unwrap()
+    }
+
+    pub fn get_child(&self, name: impl AsRef<str>) -> Option<&NodeItem<B>> {
         let name = name.as_ref();
         self.children
             .iter()
@@ -642,7 +690,7 @@ impl<B: EnvyBackend> NodeItem<B> {
             .map(|node| &node.node)
     }
 
-    pub fn child_mut(&mut self, name: impl AsRef<str>) -> Option<&mut NodeItem<B>> {
+    pub fn get_child_mut(&mut self, name: impl AsRef<str>) -> Option<&mut NodeItem<B>> {
         let name = name.as_ref();
         self.children
             .iter_mut()

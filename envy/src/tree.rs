@@ -177,6 +177,10 @@ impl<B: EnvyBackend> LayoutRoot<B> {
     pub fn rename_template(&mut self, old_name: impl AsRef<str>, new_name: impl Into<String>) {
         let old = old_name.as_ref();
         let new_name: String = new_name.into();
+        for node in self.root_template.root_nodes.iter_mut() {
+            Self::rename_sublayout_reference_in_template(node, old, &new_name);
+        }
+
         if let Some(template) = self.templates.remove(old_name.as_ref()) {
             self.root_layout.visit_roots_mut(|root| {
                 Self::rename_sublayout_reference(root, old, &new_name);
@@ -346,7 +350,9 @@ impl<B: EnvyBackend> LayoutTree<B> {
                         continue;
                     };
 
-                    should_keep |= !node_anim.animate(*progress, node.transform_mut());
+                    let mut color = node.color();
+                    should_keep |= !node_anim.animate(*progress, node.transform_mut(), &mut color);
+                    *node.color_mut() = color;
                 }
 
                 should_keep
@@ -354,6 +360,26 @@ impl<B: EnvyBackend> LayoutTree<B> {
                 false
             }
         });
+
+        self.walk_tree_mut(|node| {
+            if let Some(sublayout) = node.downcast_mut::<SublayoutNode<B>>() {
+                sublayout.as_layout_mut().update_animations();
+            }
+        });
+    }
+
+    pub fn sync_to_animation_keyframe(&mut self, animation_name: &str, keyframe: usize) {
+        if let Some(animation) = self.animations.get(animation_name) {
+            for node_anim in animation.node_animations.iter() {
+                let Some(node) = Self::get_node_by_path_mut_impl(&mut self.root_children, Utf8Path::new(&node_anim.node_path)) else {
+                    continue;
+                };
+
+                let mut color = node.color();
+                node_anim.animate(keyframe as f32, node.transform_mut(), &mut color);
+                *node.color_mut() = color;
+            }
+        }
     }
 
     pub fn propagate_with_root_transform(&mut self, transform: &NodeTransform, affine: &Affine2, changed: bool) {
@@ -363,7 +389,7 @@ impl<B: EnvyBackend> LayoutTree<B> {
         let parent_anchor_to_origin = transform.size * transform.anchor.as_vec();
         let self_translation = parent_anchor_to_origin;
         let center = self_translation + -transform.anchor.as_vec() * actual_size;
-        let affine = *affine * Affine2::from_scale_angle_translation(this_scale, transform.angle.to_radians(), center);
+        let affine = *affine * Affine2::from_scale_angle_translation(transform.size / self.canvas_size.as_vec2(), 0.0, center);
 
         self.root_children.iter_mut().for_each(|child| {
             child.node.propagate(PropagationArgs {
@@ -403,7 +429,7 @@ impl<B: EnvyBackend> LayoutTree<B> {
                 return Some(current);
             };
 
-            let next = current.child(next.as_str())?;
+            let next = current.get_child(next.as_str())?;
             get_node_by_path_recursive(next, components)
         }
 
@@ -428,7 +454,7 @@ impl<B: EnvyBackend> LayoutTree<B> {
             return Some(current);
         };
 
-        let next = current.child_mut(next.as_str())?;
+        let next = current.get_child_mut(next.as_str())?;
         Self::get_node_by_path_recursive(next, components)
     }
 

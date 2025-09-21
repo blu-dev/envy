@@ -33,6 +33,11 @@ pub struct PreparedGlyph<R: EnvyBackend> {
     pub size: glam::Vec2,
 }
 
+pub struct DrawTextureArgs<B: EnvyBackend> {
+    pub texture: B::TextureHandle,
+    pub mask_texture: Option<B::TextureHandle>,
+}
+
 /// Abstractions over rendering APIs
 ///
 /// This trait allows `envy` layouts to be agnostic to the rendering APIs being used behind the scenes. This trait is
@@ -107,6 +112,14 @@ pub trait EnvyBackend: Sized + EnvyMaybeSendSync + 'static {
         uniform: Self::UniformHandle,
         handle: Self::TextureHandle,
         pass: &mut Self::RenderPass<'_>,
+    );
+
+    /// Draws a texture with advanced arguments
+    fn draw_texture_ext(
+        &self,
+        uniform: Self::UniformHandle,
+        args: DrawTextureArgs<Self>,
+        pass: &mut Self::RenderPass<'_>
     );
 
     /// Draws a glyph with the provided handle and uniform to the screen

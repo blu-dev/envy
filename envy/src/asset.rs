@@ -24,7 +24,7 @@ impl Version {
     }
 
     const fn current() -> Self {
-        Self::new(0, 2, 1)
+        Self::new(0, 3, 1)
     }
 }
 
@@ -178,7 +178,7 @@ mod v010 {
         fn from_map_t<U>(value: &crate::animations::AnimationTransform<U>, f: fn(&U) -> T) -> Self {
             Self {
                 end: f(&value.end),
-                duration: value.duration,
+                duration: value.duration as f32,
                 first_step: value.first_step.into(),
                 additional_steps: value
                     .additional_steps
@@ -192,7 +192,7 @@ mod v010 {
         fn into_map_t<U>(self, f: fn(T) -> U) -> crate::animations::AnimationTransform<U> {
             crate::animations::AnimationTransform::<U> {
                 end: f(self.end),
-                duration: self.duration,
+                duration: self.duration as usize,
                 first_step: self.first_step.into(),
                 additional_steps: self
                     .additional_steps
@@ -256,6 +256,10 @@ mod v010 {
             Self {
                 node_path: value.node,
                 angle_channel: value.angle.map(|channel| channel.into_map_t(|float| float)),
+                position_channel: None,
+                size_channel: None,
+                scale_channel: None,
+                color_channel: None,
             }
         }
     }
@@ -280,6 +284,7 @@ mod v010 {
     impl From<Animation> for crate::animations::Animation {
         fn from(value: Animation) -> Self {
             Self {
+                total_duration: todo!(),
                 node_animations: value
                     .node_animations
                     .into_iter()
@@ -332,7 +337,7 @@ mod v010 {
                         let (name, data) = images.remove(pos);
                         backend.load_image_bytes_with_name(name, data);
                     }
-                    NodeImplTemplate::Image(ImageNodeTemplate { texture_name: image.resource_name })
+                    NodeImplTemplate::Image(ImageNodeTemplate { texture_name: image.resource_name, mask_texture_name: None, })
                 }
                 NodeImplementationV010::Text(text) => {
                     if let Some(pos) = fonts.iter().position(|(name, _)| name.eq(&text.font_name)) {
@@ -420,6 +425,209 @@ mod v020 {
     }
 }
 
+mod v021 {
+    use super::*;
+    use std::io::Cursor;
+
+    #[derive(bincode::Encode, bincode::Decode)]
+    struct NodeAnimation {
+        node_path: String,
+        angle_channel: Option<AnimationChannel<f32>>,
+        position_channel: Option<AnimationChannel<glam::Vec2>>,
+        size_channel: Option<AnimationChannel<glam::Vec2>>,
+        scale_channel: Option<AnimationChannel<glam::Vec2>>,
+    }
+
+    impl From<NodeAnimation> for crate::animations::NodeAnimation {
+        fn from(value: NodeAnimation) -> Self {
+            Self {
+                node_path: value.node_path,
+                angle_channel: value.angle_channel,
+                position_channel: value.position_channel,
+                size_channel: value.size_channel,
+                scale_channel: value.scale_channel,
+                color_channel: None,
+            }
+        }
+    }
+
+    #[derive(bincode::Encode, bincode::Decode)]
+    struct Animation {
+        node_animations: Vec<NodeAnimation>,
+        total_duration: usize,
+    }
+
+    impl From<Animation> for crate::animations::Animation {
+        fn from(value: Animation) -> Self {
+            Self {
+                node_animations: value.node_animations.into_iter().map(Into::into).collect(),
+                total_duration: value.total_duration,
+            }
+        }
+    }
+
+    use crate::{template::NodeTemplate, AnimationChannel};
+    #[derive(bincode::Encode, bincode::Decode)]
+    struct LayoutTemplate {
+        canvas_size: [u32; 2],
+        root_nodes: Vec<NodeTemplate>,
+        animations: Vec<(String, Animation)>,
+    }
+
+    impl From<LayoutTemplate> for crate::LayoutTemplate {
+        fn from(value: LayoutTemplate) -> Self {
+            Self {
+                canvas_size: value.canvas_size,
+                root_nodes: value.root_nodes,
+                animations: value.animations.into_iter().map(|(name, anim)| (name, anim.into())).collect(),
+            }
+        }
+    }
+
+    #[derive(Decode, Encode)]
+    struct Asset {
+        images: Vec<(String, Vec<u8>)>,
+        fonts: Vec<(String, Vec<u8>)>,
+        templates: Vec<(String, LayoutTemplate)>,
+        root_template: LayoutTemplate,
+    }
+
+    pub(super) fn deserialize<B: EnvyBackend + EnvyAssetProvider>(
+        backend: &mut B,
+        reader: &mut Cursor<&[u8]>
+    ) -> crate::LayoutRoot<B> {
+        let asset: Asset = bincode::decode_from_std_read(reader, bincode::config::standard()).unwrap();
+
+        let root_template = crate::LayoutTemplate::from(asset.root_template);
+
+        let templates = asset.templates.into_iter().map(|(name, template)| (name, crate::LayoutTemplate::from(template)));
+
+        let root = crate::LayoutRoot::from_root_template(root_template, templates);
+
+        for (image, bytes) in asset.images {
+            backend.load_image_bytes_with_name(image, bytes);
+        }
+
+        for (font, bytes) in asset.fonts {
+            backend.load_font_bytes_with_name(font, bytes);
+        }
+
+        root
+    }
+}
+
+mod v030 {
+    use std::io::Cursor;
+
+    use crate::{Animation, NodeTransform, SublayoutNodeTemplate, TextNodeTemplate};
+
+    #[derive(bincode::Encode, bincode::Decode)]
+    #[derive(Clone)]
+    struct ImageNodeTemplate {
+        pub texture_name: String,
+    }
+
+    impl From<ImageNodeTemplate> for crate::ImageNodeTemplate {
+        fn from(value: ImageNodeTemplate) -> Self {
+            Self {
+                texture_name: value.texture_name,
+                mask_texture_name: None,
+            }
+        }
+    }
+
+    #[derive(bincode::Encode, bincode::Decode)]
+    #[derive(Clone)]
+    enum NodeImplTemplate {
+        Empty,
+        Image(ImageNodeTemplate),
+        Text(TextNodeTemplate),
+        Sublayout(SublayoutNodeTemplate),
+    }
+
+    impl From<NodeImplTemplate> for crate::NodeImplTemplate {
+        fn from(value: NodeImplTemplate) -> Self {
+            use NodeImplTemplate as N;
+            match value {
+                N::Empty => Self::Empty,
+                N::Image(image) => Self::Image(image.into()),
+                N::Text(text) => Self::Text(text),
+                N::Sublayout(sublayout) => Self::Sublayout(sublayout)
+            }
+        }
+    }
+
+    #[derive(Clone)]
+    #[derive(bincode::Encode, bincode::Decode)]
+    struct NodeTemplate {
+        name: String,
+        transform: NodeTransform,
+        color: [u8; 4],
+        children: Vec<NodeTemplate>,
+        implementation: NodeImplTemplate,
+    }
+
+    impl From<NodeTemplate> for crate::NodeTemplate {
+        fn from(value: NodeTemplate) -> Self {
+            Self {
+                name: value.name,
+                transform: value.transform,
+                color: value.color,
+                children: value.children.into_iter().map(Into::into).collect(),
+                implementation: value.implementation.into()
+            }
+        }
+    }
+
+    #[derive(bincode::Encode, bincode::Decode)]
+    struct LayoutTemplate {
+        canvas_size: [u32; 2],
+        root_nodes: Vec<NodeTemplate>,
+        animations: Vec<(String, Animation)>,
+    }
+
+    impl From<LayoutTemplate> for crate::LayoutTemplate {
+        fn from(value: LayoutTemplate) -> Self {
+            Self {
+                canvas_size: value.canvas_size,
+                root_nodes: value.root_nodes.into_iter().map(Into::into).collect(),
+                animations: value.animations.into_iter().map(|(name, anim)| (name, anim.into())).collect(),
+            }
+        }
+    }
+
+    #[derive(bincode::Decode, bincode::Encode)]
+    struct Asset {
+        images: Vec<(String, Vec<u8>)>,
+        fonts: Vec<(String, Vec<u8>)>,
+        templates: Vec<(String, LayoutTemplate)>,
+        root_template: LayoutTemplate,
+    }
+
+    pub(super) fn deserialize<B: crate::EnvyBackend + super::EnvyAssetProvider>(
+        backend: &mut B,
+        reader: &mut Cursor<&[u8]>
+    ) -> crate::LayoutRoot<B> {
+        let asset: Asset = bincode::decode_from_std_read(reader, bincode::config::standard()).unwrap();
+
+        let root_template = crate::LayoutTemplate::from(asset.root_template);
+
+        let templates = asset.templates.into_iter().map(|(name, template)| (name, crate::LayoutTemplate::from(template)));
+
+        let root = crate::LayoutRoot::from_root_template(root_template, templates);
+
+        for (image, bytes) in asset.images {
+            backend.load_image_bytes_with_name(image, bytes);
+        }
+
+        for (font, bytes) in asset.fonts {
+            backend.load_font_bytes_with_name(font, bytes);
+        }
+
+        root
+    }
+}
+
 #[derive(Decode, Encode)]
 struct Asset {
     images: Vec<(String, Vec<u8>)>,
@@ -456,9 +664,18 @@ pub fn serialize<B: EnvyBackend + EnvyAssetProvider>(
     for template in [&asset.root_template].into_iter().chain(asset.templates.iter().map(|(_, template)| template)) {
         template.walk_tree(|node| {
             match &node.implementation {
-                NodeImplTemplate::Image(image) if !serialized_images.contains(&image.texture_name) => {
-                    serialized_images.insert(image.texture_name.clone());
-                    asset.images.push((image.texture_name.clone(), backend.fetch_image_bytes_by_name(&image.texture_name).to_vec()))
+                NodeImplTemplate::Image(image) => {
+                    if !serialized_images.contains(&image.texture_name) {
+                        serialized_images.insert(image.texture_name.clone());
+                        asset.images.push((image.texture_name.clone(), backend.fetch_image_bytes_by_name(&image.texture_name).to_vec()))
+                    }
+
+                    if let Some(mask_name) = image.mask_texture_name.as_ref() {
+                        if !serialized_images.contains(mask_name) {
+                            serialized_images.insert(mask_name.clone());
+                            asset.images.push((mask_name.clone(), backend.fetch_image_bytes_by_name(&mask_name).to_vec()))
+                        }
+                    }
                 },
                 NodeImplTemplate::Text(text) if !serialized_fonts.contains(&text.font_name) => {
                     serialized_fonts.insert(text.font_name.clone());
@@ -494,6 +711,10 @@ pub fn deserialize<B: EnvyBackend + EnvyAssetProvider>(
         return v010::deserialize(backend, &mut reader);
     } else if version == Version::new(0, 2, 0) {
         return v020::deserialize(backend, &mut reader);
+    } else if version == Version::new(0, 2, 1) {
+        return v021::deserialize(backend, &mut reader);
+    } else if version == Version::new(0, 3, 0) {
+        return v030::deserialize(backend, &mut reader);
     }
 
     assert_eq!(version, Version::current());

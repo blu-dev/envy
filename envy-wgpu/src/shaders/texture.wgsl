@@ -25,6 +25,8 @@ struct VertexOut {
 @group(1) @binding(0) var<uniform> draw_uniform: DrawUniform;
 @group(2) @binding(0) var color_sampler: sampler;
 @group(2) @binding(1) var texture: texture_2d<f32>;
+@group(3) @binding(0) var mask_sampler: sampler;
+@group(3) @binding(1) var mask_texture: texture_2d<f32>;
 
 @vertex
 fn vertex(vertex: VertexIn) -> VertexOut {
@@ -39,5 +41,7 @@ fn vertex(vertex: VertexIn) -> VertexOut {
 
 @fragment
 fn fragment(in: VertexOut) -> @location(0) vec4<f32> {
-    return textureSample(texture, color_sampler, in.texcoord) * in.color;
+    var mask_color = textureSample(mask_texture, mask_sampler, in.texcoord);
+    mask_color = vec4(mask_color.xyz * mask_color.a, mask_color.a);
+    return textureSample(texture, color_sampler, in.texcoord) * mask_color * in.color;
 }

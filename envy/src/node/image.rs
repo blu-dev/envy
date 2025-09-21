@@ -1,22 +1,25 @@
 use glam::Affine2;
 
 use crate::{
-    DrawUniform, EnvyBackend, Node,
-    node::{PreparationArgs, affine2_to_mat4},
+    node::{affine2_to_mat4, PreparationArgs}, DrawTextureArgs, DrawUniform, EnvyBackend, Node
 };
 
 pub struct ImageNode<B: EnvyBackend> {
     name: String,
+    mask_texture_name: Option<String>,
     uniform: Option<B::UniformHandle>,
     texture: Option<B::TextureHandle>,
+    mask_texture: Option<B::TextureHandle>,
 }
 
 impl<B: EnvyBackend> ImageNode<B> {
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
+            mask_texture_name: None,
             uniform: None,
             texture: None,
+            mask_texture: None,
         }
     }
 
@@ -29,8 +32,21 @@ impl<B: EnvyBackend> ImageNode<B> {
         self.invalidate_image_handle();
     }
 
+    pub fn mask_texture_name(&self) -> Option<&str> {
+        self.mask_texture_name.as_deref()
+    }
+
+    pub fn set_mask_texture_name(&mut self, name: impl Into<Option<String>>) {
+        self.mask_texture_name = name.into();
+        self.invalidate_mask_handle();
+    }
+
     pub fn invalidate_image_handle(&mut self) {
         self.texture = None;
+    }
+
+    pub fn invalidate_mask_handle(&mut self) {
+        self.mask_texture = None;
     }
 }
 
@@ -54,6 +70,10 @@ impl<B: EnvyBackend> Node<B> for ImageNode<B> {
             self.texture = backend.request_texture_by_name(&self.name);
         }
 
+        if let Some(name) = self.mask_texture_name.as_ref() {
+            self.mask_texture = backend.request_texture_by_name(name);
+        }
+
         if self.uniform.is_none() {
             log::warn!(
                 "ImageNode::setup_resources failed to acquire uniform buffer from backend (image '{}')",
@@ -66,6 +86,15 @@ impl<B: EnvyBackend> Node<B> for ImageNode<B> {
                 "ImageNode::setup_resources failed to acquire texture from backend (image '{}')",
                 self.name
             );
+        }
+
+        if let Some(name) = self.mask_texture_name.as_ref() {
+            if self.mask_texture.is_none() {
+                log::warn!(
+                    "ImageNode::setup_resources failed to acquire mask texture from backend (image '{}')",
+                    name
+                );
+            }
         }
     }
 
@@ -120,6 +149,20 @@ impl<B: EnvyBackend> Node<B> for ImageNode<B> {
             return;
         };
 
-        backend.draw_texture(uniform, texture, pass);
+        let mask_texture = if let Some(mask_image_name) = self.mask_texture_name.as_ref() {
+            let Some(mask_texture) = self.mask_texture else {
+                log::error!("ImageNode::render called without mask texture being set (image '{}')", mask_image_name);
+                return;
+            };
+
+            Some(mask_texture)
+        } else {
+            None
+        };
+
+        backend.draw_texture_ext(uniform, DrawTextureArgs {
+            texture,
+            mask_texture,
+        }, pass);
     }
 }

@@ -1,26 +1,20 @@
 [package]
 name = "envy-designer"
-version = "0.2.0"
-edition.workspace = true
+version = "0.1.0"
+edition = "2024"
 
 [dependencies]
-bincode = "1.3"
-bson = "2.15.0"
-bytemuck = { version = "1.23.2", features = ["derive"] }
-camino = "1.1.11"
-cosmic-text = "0.14.2"
-eframe = { version = "0.32.1", features = ["wgpu"] }
-egui = "0.32.1"
-egui-wgpu = "0.32.1"
-egui_extras = { version = "0.32.1", features = ["svg"] }
-glam = { version = "0.30.5", features = ["bytemuck", "serde"] }
-image = { version = "0.25.6", default-features = false, features = ["png"] }
-indexmap = "2.11.0"
-lyon = "1.0.1"
-rfd = "0.15.4"
-serde = { version = "1.0.219", features = ["derive"] }
+eframe = { version = "0.32.3", features = ["wgpu"] }
+egui = "0.32.3"
+egui-wgpu = "0.32.3"
 wgpu = "25"
 
 envy = { path = "../envy" }
 envy-wgpu = { path = "../envy-wgpu" }
+parking_lot = "0.12.4"
+egui_dock = "0.17.0"
 env_logger = "0.11.8"
+egui_ltreeview = "0.5.3"
+camino = "1.2.0"
+glam = "0.30.7"
+rfd = "0.15.4"

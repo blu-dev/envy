@@ -6,6 +6,7 @@ use crate::{Animation, NodeTransform};
 #[derive(Clone)]
 pub struct ImageNodeTemplate {
     pub texture_name: String,
+    pub mask_texture_name: Option<String>,
 }
 
 #[cfg_attr(feature = "asset", derive(bincode::Encode, bincode::Decode))]
@@ -32,6 +33,7 @@ pub enum NodeImplTemplate {
     Sublayout(SublayoutNodeTemplate),
 }
 
+#[cfg_attr(feature = "asset", derive(bincode::Encode, bincode::Decode))]
 #[derive(Clone)]
 pub struct NodeTemplate {
     pub name: String,
@@ -63,6 +65,47 @@ impl NodeTemplate {
 
     pub fn visit_children_mut(&mut self, f: impl FnMut(&mut Self)) {
         self.children.iter_mut().for_each(f);
+    }
+
+    #[must_use = "This method can fail if there is another child with the same name"]
+    pub fn insert_child_first(&mut self, node: Self) -> bool {
+        if self.children.iter().any(|child| child.name == node.name) {
+            return false;
+        }
+
+        self.children.insert(0, node);
+
+        true
+    }
+
+    #[must_use = "This method can fail if there is another child with the same name, or no node with the target name"]
+    pub fn insert_child_before(&mut self, node: Self, target: &str) -> bool {
+        if self.children.iter().any(|child| child.name == node.name) {
+            return false;
+        }
+
+        let Some(pos) = self.children.iter().position(|child| child.name == target) else {
+            return false;
+        };
+
+        self.children.insert(pos, node);
+
+        true
+    }
+
+    #[must_use = "This method can fail if there is another child with the same name, or no node with the target name"]
+    pub fn insert_child_after(&mut self, node: Self, target: &str) -> bool {
+        if self.children.iter().any(|child| child.name == node.name) {
+            return false;
+        }
+
+        let Some(pos) = self.children.iter().position(|child| child.name == target) else {
+            return false;
+        };
+
+        self.children.insert(pos + 1, node);
+
+        true
     }
 
     #[must_use = "This method can fail if there is another child with the same name"]
@@ -218,6 +261,26 @@ const _: () = {
         }
     }
 
+    impl bincode::Encode for Anchor {
+        fn encode<E: bincode::enc::Encoder>(&self, encoder: &mut E) -> Result<(), bincode::error::EncodeError> {
+            AnchorRepr::from(*self).encode(encoder)
+        }
+    }
+
+    impl<'de, C> bincode::BorrowDecode<'de, C> for Anchor {
+        fn borrow_decode<D: bincode::de::BorrowDecoder<'de, Context = C>>(
+            decoder: &mut D,
+        ) -> Result<Self, bincode::error::DecodeError> {
+            bincode::Decode::decode(decoder)
+        }
+    }
+
+    impl<C> bincode::Decode<C> for Anchor {
+        fn decode<D: bincode::de::Decoder<Context = C>>(decoder: &mut D) -> Result<Self, bincode::error::DecodeError> {
+            AnchorRepr::decode(decoder).map(Self::from)
+        }
+    }
+
     impl From<NodeTransform> for NodeTransformRepr {
         fn from(value: NodeTransform) -> Self {
             Self {
@@ -242,17 +305,13 @@ const _: () = {
         }
     }
 
-    impl bincode::Encode for NodeTemplate {
+    impl bincode::Encode for NodeTransform {
         fn encode<E: bincode::enc::Encoder>(&self, encoder: &mut E) -> Result<(), bincode::error::EncodeError> {
-            self.name.encode(encoder)?;
-            NodeTransformRepr::from(self.transform).encode(encoder)?;
-            self.color.encode(encoder)?;
-            self.children.encode(encoder)?;
-            self.implementation.encode(encoder)
-                }
+            NodeTransformRepr::from(*self).encode(encoder)
+        }
     }
 
-    impl<'de, C> bincode::BorrowDecode<'de, C> for NodeTemplate {
+    impl<'de, C> bincode::BorrowDecode<'de, C> for NodeTransform {
         fn borrow_decode<D: bincode::de::BorrowDecoder<'de, Context = C>>(
             decoder: &mut D,
         ) -> Result<Self, bincode::error::DecodeError> {
@@ -260,18 +319,19 @@ const _: () = {
         }
     }
 
-    impl<C> bincode::Decode<C> for NodeTemplate {
+    impl<C> bincode::Decode<C> for NodeTransform {
         fn decode<D: bincode::de::Decoder<Context = C>>(decoder: &mut D) -> Result<Self, bincode::error::DecodeError> {
-            Ok(Self {
-                name: String::decode(decoder)?,
-                transform: NodeTransformRepr::decode(decoder)?.into(),
-                color: <[u8; 4]>::decode(decoder)?,
-                children: <Vec<NodeTemplate>>::decode(decoder)?,
-                implementation: NodeImplTemplate::decode(decoder)?,
-            })
+            NodeTransformRepr::decode(decoder).map(Self::from)
         }
     }
 };
+
+pub enum MoveNodePosition<'a> {
+    First,
+    Before(&'a str),
+    After(&'a str),
+    Last,
+}
 
 #[cfg_attr(feature = "asset", derive(bincode::Encode, bincode::Decode))]
 #[derive(Default, Clone)]
@@ -284,6 +344,47 @@ pub struct LayoutTemplate {
 impl LayoutTemplate {
     pub fn add_animation(&mut self, name: impl Into<String>, animation: Animation) {
         self.animations.push((name.into(), animation));
+    }
+
+    #[must_use = "This method can fail if there is another child with the same name"]
+    pub fn insert_child_first(&mut self, node: NodeTemplate) -> bool {
+        if self.root_nodes.iter().any(|child| child.name == node.name) {
+            return false;
+        }
+
+        self.root_nodes.insert(0, node);
+
+        true
+    }
+
+    #[must_use = "This method can fail if there is another child with the same name, or no node with the target name"]
+    pub fn insert_child_before(&mut self, node: NodeTemplate, target: &str) -> bool {
+        if self.root_nodes.iter().any(|child| child.name == node.name) {
+            return false;
+        }
+
+        let Some(pos) = self.root_nodes.iter().position(|child| child.name == target) else {
+            return false;
+        };
+
+        self.root_nodes.insert(pos, node);
+
+        true
+    }
+
+    #[must_use = "This method can fail if there is another child with the same name, or no node with the target name"]
+    pub fn insert_child_after(&mut self, node: NodeTemplate, target: &str) -> bool {
+        if self.root_nodes.iter().any(|child| child.name == node.name) {
+            return false;
+        }
+
+        let Some(pos) = self.root_nodes.iter().position(|child| child.name == target) else {
+            return false;
+        };
+
+        self.root_nodes.insert(pos + 1, node);
+
+        true
     }
 
     pub fn add_child(&mut self, node: NodeTemplate) {
@@ -449,6 +550,68 @@ impl LayoutTemplate {
         }
 
         true
+    }
+
+    pub fn move_node(&mut self, old_path: impl AsRef<Utf8Path>, new_path: impl AsRef<Utf8Path>, pos: MoveNodePosition) {
+        let old_path = old_path.as_ref();
+        let new_path = new_path.as_ref();
+
+        let old_parent_path = match old_path.parent() {
+            // Special case root
+            Some(path) if matches!(path.as_str(), "/" | "") => None,
+            other => other,
+        };
+
+        let new_parent_path = match new_path.parent() {
+            // Special case root
+            Some(path) if matches!(path.as_str(), "/" | "") => None,
+            other => other,
+        };
+
+        // TODO: Validate that all node paths actually have a name. Not sure how to do this other than runtime checks
+        // and real error messages
+        let name = old_path.file_name().unwrap();
+
+        let node = match old_parent_path {
+            Some(parent_path) => {
+                let parent_node = self.get_node_by_path_mut(parent_path).unwrap();
+
+                parent_node.remove_child(name).unwrap()
+            }
+            None => NodeTemplate::remove_child_impl(&mut self.root_nodes, name).unwrap(),
+        };
+
+        match new_parent_path {
+            Some(parent_path) => {
+                let parent_node = self.get_node_by_path_mut(parent_path).unwrap();
+
+                match pos {
+                    MoveNodePosition::First => assert!(parent_node.insert_child_first(node)),
+                    MoveNodePosition::Before(name) => assert!(parent_node.insert_child_before(node, name)),
+                    MoveNodePosition::After(name) => assert!(parent_node.insert_child_after(node, name)),
+                    MoveNodePosition::Last => assert!(parent_node.add_child(node)),
+                }
+            }
+            None => {
+                match pos {
+                    MoveNodePosition::First => assert!(self.insert_child_first(node)),
+                    MoveNodePosition::Before(name) => assert!(self.insert_child_before(node, name)),
+                    MoveNodePosition::After(name) => assert!(self.insert_child_after(node, name)),
+                    MoveNodePosition::Last => self.add_child(node),
+                }
+            }
+        }
+
+        for (_, animation) in self.animations.iter_mut() {
+            animation
+                .node_animations
+                .iter_mut()
+                .for_each(|anim| {
+                    if anim.node_path == old_path.as_str() {
+                        anim.node_path = new_path.to_string();
+                    }
+                });
+        }
     }
 
     pub fn remove_node(&mut self, path: impl AsRef<Utf8Path>) -> Option<NodeTemplate> {

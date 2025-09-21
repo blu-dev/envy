@@ -13,9 +13,9 @@ use cosmic_text::{
     fontdb::{FaceInfo, Source},
 };
 use envy::{
-    DrawUniform, EnvyBackend, PreparedGlyph, TextLayoutArgs, ViewUniform, asset::EnvyAssetProvider,
+    asset::EnvyAssetProvider, DrawTextureArgs, DrawUniform, EnvyBackend, PreparedGlyph, TextLayoutArgs, ViewUniform
 };
-use glam::{Mat4, Vec3, Vec4};
+use glam::{Vec3, Vec4};
 use image::{ImageEncoder, codecs::png::PngEncoder};
 use indexmap::IndexMap;
 use lyon::{
@@ -62,10 +62,12 @@ struct ReservedTexture {
 }
 
 struct TextureBackend {
+    cpu_image_cache: IndexMap<Cow<'static, str>, Vec<u8>>,
     image_cache: IndexMap<Cow<'static, str>, wgpu::Texture>,
     textures: Vec<ReservedTexture>,
     texture_slots: BitVec,
     texture_bgl: wgpu::BindGroupLayout,
+    default_mask_texture: wgpu::BindGroup,
     pipeline: wgpu::RenderPipeline,
     vertex_buffer: wgpu::Buffer,
 }
@@ -140,10 +142,45 @@ impl TextureBackend {
             &default_texture_bytes,
         );
 
+        let default_mask_texture = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("envy_default_mask_texture"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[]
+            },
+            wgpu::wgt::TextureDataOrder::MipMajor,
+            &[0xFF; 4]
+        );
+
+        let default_mask_texture = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &texture_bgl,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Sampler(&device.create_sampler(&Default::default())),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&default_mask_texture.create_view(&Default::default())),
+                },
+            ]
+        });
+
         let texture_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("envy_texture_pipeline_layout"),
-                bind_group_layouts: &[&view_bgl, &draw_bgl, &texture_bgl],
+                bind_group_layouts: &[&view_bgl, &draw_bgl, &texture_bgl, &texture_bgl],
                 push_constant_ranges: &[],
             });
 
@@ -151,6 +188,7 @@ impl TextureBackend {
             label: Some("envy_texture_shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("./shaders/texture.wgsl").into()),
         });
+
 
         let texture_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("envy_texture_pipeline"),
@@ -211,15 +249,22 @@ impl TextureBackend {
             usage: wgpu::BufferUsages::VERTEX,
         });
 
+        let mut cpu_image_cache = IndexMap::new();
+        let mut buffer = std::io::Cursor::new(vec![]);
+        image::write_buffer_with_format(&mut buffer, &default_texture_bytes, 40, 40, image::ExtendedColorType::Rgba8, image::ImageFormat::Png).unwrap();
+        cpu_image_cache.insert("".into(), buffer.into_inner());
+
         let mut image_cache = IndexMap::new();
         image_cache.insert("".into(), default_texture.clone());
         Self {
+            cpu_image_cache,
             image_cache,
             textures: vec![],
             texture_slots: BitVec::new(),
             texture_bgl,
             pipeline: texture_pipeline,
             vertex_buffer,
+            default_mask_texture,
         }
     }
 
@@ -417,7 +462,7 @@ impl WgpuFontBackend {
             vertices: BufferVec::new(wgpu::BufferUsages::VERTEX),
             indices: BufferVec::new(wgpu::BufferUsages::INDEX),
             loaded_fonts: IndexMap::new(),
-            constant_pipeline: constant_pipeline,
+            constant_pipeline,
         }
     }
 
@@ -529,8 +574,15 @@ impl WgpuFontBackend {
         let mut buffer = cosmic_text::Buffer::new(&mut self.system, metrics);
         let mut buffer = buffer.borrow_with(&mut self.system);
         buffer.set_size(Some(args.buffer_size.x), Some(args.buffer_size.y));
-        buffer.set_text(
-            args.text.as_ref(),
+        buffer.set_rich_text(
+            [
+                (args.text, cosmic_text::Attrs {
+                    family: Family::Name(&face.families[0].0),
+                    stretch: face.stretch,
+                    style: face.style,
+                    weight: face.weight,
+                    ..cosmic_text::Attrs::new()
+            })],
             &cosmic_text::Attrs {
                 family: Family::Name(&face.families[0].0),
                 stretch: face.stretch,
@@ -539,6 +591,7 @@ impl WgpuFontBackend {
                 ..cosmic_text::Attrs::new()
             },
             cosmic_text::Shaping::Basic,
+            Some(cosmic_text::Align::Center)
         );
 
         let mut glyphs = vec![];
@@ -561,8 +614,6 @@ impl WgpuFontBackend {
                 ));
             }
         }
-
-        drop(buffer);
 
         let mut prepared_glyphs = vec![];
         for (key, w, h, x, y) in glyphs {
@@ -731,9 +782,9 @@ impl WgpuBackend {
     pub fn add_texture(
         &mut self,
         name: impl Into<Cow<'static, str>>,
-        image: &[u8],
+        image_bytes: &[u8],
     ) -> wgpu::Texture {
-        let image = image::load_from_memory(image).unwrap().to_rgba8();
+        let image = image::load_from_memory(image_bytes).unwrap().to_rgba8();
 
         let texture = self.device.create_texture_with_data(
             &self.queue,
@@ -755,10 +806,12 @@ impl WgpuBackend {
             image.as_raw(),
         );
 
+        let name: Cow<'static, str> = name.into();
+
         if let Some(prev) = self
             .textures
             .image_cache
-            .insert(name.into(), texture.clone())
+            .insert(name.to_string().into(), texture.clone())
         {
             self.textures.textures.iter_mut().for_each(|reserved| {
                 if reserved.texture == prev {
@@ -783,6 +836,26 @@ impl WgpuBackend {
                 }
             });
         }
+
+        let mut out = std::io::Cursor::new(vec![]);
+        {
+            let encoder = PngEncoder::new_with_quality(
+                &mut out,
+                image::codecs::png::CompressionType::Best,
+                image::codecs::png::FilterType::Adaptive,
+            );
+            encoder
+                .write_image(
+                    &image.as_raw(),
+                    image.width(),
+                    image.height(),
+                    image::ExtendedColorType::Rgba8,
+                )
+                .unwrap();
+        }
+
+        let _ = self.textures.cpu_image_cache.insert(name, out.into_inner());
+
         texture
     }
 
@@ -812,6 +885,8 @@ impl WgpuBackend {
                 wgpu::wgt::TextureDataOrder::LayerMajor,
                 image.as_raw(),
             );
+
+            self.textures.cpu_image_cache.insert(name.to_string().into(), image.to_vec());
 
             self.textures
                 .image_cache
@@ -887,9 +962,15 @@ impl WgpuBackend {
             .unwrap()
             .1;
 
+        let new: Cow<'static, str> = new.into();
+
         self.textures
             .image_cache
-            .insert_before(index, new.into(), texture);
+            .insert_before(index, new.to_string().into(), texture);
+
+        let index = self.textures.cpu_image_cache.get_index_of(old).unwrap();
+        let texture = self.textures.cpu_image_cache.shift_remove_index(index).unwrap().1;
+        self.textures.cpu_image_cache.insert_before(index, new, texture);
     }
 
     pub fn rename_font(&mut self, old: &str, new: impl Into<String>) {
@@ -928,7 +1009,7 @@ impl WgpuBackend {
         self.fonts
             .loaded_fonts
             .iter()
-            .map(|(name, face_name)| {
+            .map(|(name, _face_name)| {
                 let source = self
                     .fonts
                     .system
@@ -1127,13 +1208,23 @@ impl EnvyBackend for WgpuBackend {
         texture: Self::TextureHandle,
         pass: &mut Self::RenderPass<'_>,
     ) {
+        self.draw_texture_ext(uniform, DrawTextureArgs { texture, mask_texture: None }, pass);
+    }
+
+    fn draw_texture_ext(
+        &self,
+        uniform: Self::UniformHandle,
+        args: DrawTextureArgs<Self>,
+        pass: &mut Self::RenderPass<'_>
+    ) {
         pass.set_pipeline(&self.textures.pipeline);
         pass.set_bind_group(
             1,
             self.uniform_bind_group.as_ref().unwrap(),
             &[(uniform.0 * std::mem::size_of::<DrawUniform>()) as wgpu::DynamicOffset],
         );
-        pass.set_bind_group(2, &self.textures.textures[texture.0].bind_group, &[]);
+        pass.set_bind_group(2, &self.textures.textures[args.texture.0].bind_group, &[]);
+        pass.set_bind_group(3, args.mask_texture.map(|texture| &self.textures.textures[texture.0].bind_group).unwrap_or(&self.textures.default_mask_texture), &[]);
         pass.set_vertex_buffer(0, self.textures.vertex_buffer.slice(..));
         pass.draw(0..6, 0..1);
     }
@@ -1226,74 +1317,9 @@ impl EnvyAssetProvider for WgpuBackend {
     }
 
     fn fetch_image_bytes_by_name<'a>(&'a self, name: &str) -> Cow<'a, [u8]> {
-        let texture = self.textures.image_cache.get(name).unwrap();
+        let texture = self.textures.cpu_image_cache.get(name).unwrap();
 
-        let size = texture.size();
-        let stride = size.width as u64 * 4;
-        let real_stride = align_up(stride as usize, 0x100) as u64;
-        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: None,
-            size: real_stride * size.height as u64,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("dump_texture_encoder"),
-            });
-        encoder.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo {
-                texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d { x: 0, y: 0, z: 0 },
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyBufferInfo {
-                buffer: &buffer,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(real_stride as u32),
-                    rows_per_image: None,
-                },
-            },
-            size,
-        );
-
-        let index = self.queue.submit([encoder.finish()]);
-        buffer.map_async(wgpu::MapMode::Read, .., |res| res.unwrap());
-        self.device
-            .poll(wgpu::PollType::WaitForSubmissionIndex(index))
-            .unwrap();
-
-        let stride = (size.width * 4) as usize;
-        let real_stride = align_up(stride, 0x100);
-        let bytes = buffer.get_mapped_range(..);
-
-        let mut image_bytes = vec![0u8; stride * size.height as usize];
-        for y in 0..size.height as usize {
-            image_bytes[y * stride..(y + 1) * stride]
-                .copy_from_slice(&bytes[y * real_stride..y * real_stride + stride]);
-        }
-
-        let mut out = std::io::Cursor::new(vec![]);
-        {
-            let encoder = PngEncoder::new_with_quality(
-                &mut out,
-                image::codecs::png::CompressionType::Best,
-                image::codecs::png::FilterType::Adaptive,
-            );
-            encoder
-                .write_image(
-                    &image_bytes,
-                    size.width,
-                    size.height,
-                    image::ExtendedColorType::Rgba8,
-                )
-                .unwrap();
-        }
-
-        Cow::Owned(out.into_inner())
+        Cow::Borrowed(texture.as_slice())
     }
 
     fn load_font_bytes_with_name(&mut self, name: String, bytes: Vec<u8>) {

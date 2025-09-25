@@ -1,7 +1,8 @@
 use glam::Affine2;
 
 use crate::{
-    node::{affine2_to_mat4, PreparationArgs}, DrawTextureArgs, DrawUniform, EnvyBackend, Node
+    node::{affine2_to_mat4, PreparationArgs},
+    DrawTextureArgs, DrawUniform, EnvyBackend, Node,
 };
 
 pub struct ImageNode<B: EnvyBackend> {
@@ -151,7 +152,10 @@ impl<B: EnvyBackend> Node<B> for ImageNode<B> {
 
         let mask_texture = if let Some(mask_image_name) = self.mask_texture_name.as_ref() {
             let Some(mask_texture) = self.mask_texture else {
-                log::error!("ImageNode::render called without mask texture being set (image '{}')", mask_image_name);
+                log::error!(
+                    "ImageNode::render called without mask texture being set (image '{}')",
+                    mask_image_name
+                );
                 return;
             };
 
@@ -160,9 +164,13 @@ impl<B: EnvyBackend> Node<B> for ImageNode<B> {
             None
         };
 
-        backend.draw_texture_ext(uniform, DrawTextureArgs {
-            texture,
-            mask_texture,
-        }, pass);
+        backend.draw_texture_ext(
+            uniform,
+            DrawTextureArgs {
+                texture,
+                mask_texture,
+            },
+            pass,
+        );
     }
 }

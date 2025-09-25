@@ -121,7 +121,6 @@ impl NodeTemplate {
         self.children.push(new_node);
 
         true
-
     }
 
     // crate private so that user must go through layout to ensure all things are properly update
@@ -130,10 +129,7 @@ impl NodeTemplate {
     }
 
     // crate private so that user must go through layout to ensure all things are properly update
-    pub(crate) fn remove_child_impl(
-        group: &mut Vec<Self>,
-        name: &str,
-    ) -> Option<Self> {
+    pub(crate) fn remove_child_impl(group: &mut Vec<Self>, name: &str) -> Option<Self> {
         let pos = group.iter().position(|node| node.name.eq(name))?;
         Some(group.remove(pos))
     }
@@ -182,11 +178,7 @@ impl NodeTemplate {
 
     // crate private so that user must go through layout to ensure all things are properly updated
     #[must_use = "This method can fail if the old name was not found or there is another child with the same name"]
-    pub(crate) fn rename_child_impl(
-        group: &mut [Self],
-        old_name: &str,
-        new_name: String,
-    ) -> bool {
+    pub(crate) fn rename_child_impl(group: &mut [Self], old_name: &str, new_name: String) -> bool {
         if group.iter().any(|node| node.name.eq(&new_name)) {
             return false;
         }
@@ -262,7 +254,10 @@ const _: () = {
     }
 
     impl bincode::Encode for Anchor {
-        fn encode<E: bincode::enc::Encoder>(&self, encoder: &mut E) -> Result<(), bincode::error::EncodeError> {
+        fn encode<E: bincode::enc::Encoder>(
+            &self,
+            encoder: &mut E,
+        ) -> Result<(), bincode::error::EncodeError> {
             AnchorRepr::from(*self).encode(encoder)
         }
     }
@@ -276,7 +271,9 @@ const _: () = {
     }
 
     impl<C> bincode::Decode<C> for Anchor {
-        fn decode<D: bincode::de::Decoder<Context = C>>(decoder: &mut D) -> Result<Self, bincode::error::DecodeError> {
+        fn decode<D: bincode::de::Decoder<Context = C>>(
+            decoder: &mut D,
+        ) -> Result<Self, bincode::error::DecodeError> {
             AnchorRepr::decode(decoder).map(Self::from)
         }
     }
@@ -288,7 +285,7 @@ const _: () = {
                 position: value.position.into(),
                 size: value.size.into(),
                 scale: value.scale.into(),
-                anchor: value.anchor.into()
+                anchor: value.anchor.into(),
             }
         }
     }
@@ -306,7 +303,10 @@ const _: () = {
     }
 
     impl bincode::Encode for NodeTransform {
-        fn encode<E: bincode::enc::Encoder>(&self, encoder: &mut E) -> Result<(), bincode::error::EncodeError> {
+        fn encode<E: bincode::enc::Encoder>(
+            &self,
+            encoder: &mut E,
+        ) -> Result<(), bincode::error::EncodeError> {
             NodeTransformRepr::from(*self).encode(encoder)
         }
     }
@@ -320,7 +320,9 @@ const _: () = {
     }
 
     impl<C> bincode::Decode<C> for NodeTransform {
-        fn decode<D: bincode::de::Decoder<Context = C>>(decoder: &mut D) -> Result<Self, bincode::error::DecodeError> {
+        fn decode<D: bincode::de::Decoder<Context = C>>(
+            decoder: &mut D,
+        ) -> Result<Self, bincode::error::DecodeError> {
             NodeTransformRepr::decode(decoder).map(Self::from)
         }
     }
@@ -363,7 +365,11 @@ impl LayoutTemplate {
             return false;
         }
 
-        let Some(pos) = self.root_nodes.iter().position(|child| child.name == target) else {
+        let Some(pos) = self
+            .root_nodes
+            .iter()
+            .position(|child| child.name == target)
+        else {
             return false;
         };
 
@@ -378,7 +384,11 @@ impl LayoutTemplate {
             return false;
         }
 
-        let Some(pos) = self.root_nodes.iter().position(|child| child.name == target) else {
+        let Some(pos) = self
+            .root_nodes
+            .iter()
+            .position(|child| child.name == target)
+        else {
             return false;
         };
 
@@ -460,16 +470,11 @@ impl LayoutTemplate {
 
     pub fn has_root(&self, name: impl AsRef<str>) -> bool {
         let name = name.as_ref();
-        self.root_nodes
-            .iter()
-            .any(|node| node.name == name)
+        self.root_nodes.iter().any(|node| node.name == name)
     }
 
     pub fn walk_tree(&self, mut f: impl FnMut(&NodeTemplate)) {
-        fn walk_node_recursive(
-            node: &NodeTemplate,
-            f: &mut dyn FnMut(&NodeTemplate),
-        ) {
+        fn walk_node_recursive(node: &NodeTemplate, f: &mut dyn FnMut(&NodeTemplate)) {
             f(node);
             node.visit_children(|child| {
                 walk_node_recursive(child, f);
@@ -480,10 +485,7 @@ impl LayoutTemplate {
     }
 
     pub fn walk_tree_mut(&mut self, mut f: impl FnMut(&mut NodeTemplate)) {
-        fn walk_node_recursive(
-            node: &mut NodeTemplate,
-            f: &mut dyn FnMut(&mut NodeTemplate),
-        ) {
+        fn walk_node_recursive(node: &mut NodeTemplate, f: &mut dyn FnMut(&mut NodeTemplate)) {
             f(node);
             node.visit_children_mut(|child| {
                 walk_node_recursive(child, f);
@@ -498,9 +500,7 @@ impl LayoutTemplate {
     }
 
     pub fn visit_roots_mut(&mut self, f: impl FnMut(&mut NodeTemplate)) {
-        self.root_nodes
-            .iter_mut()
-            .for_each(f);
+        self.root_nodes.iter_mut().for_each(f);
     }
 
     /// Renames the node in the layout
@@ -533,8 +533,11 @@ impl LayoutTemplate {
                 }
             }
             None => {
-                if !NodeTemplate::rename_child_impl(&mut self.root_nodes, old_name, new_name.clone())
-                {
+                if !NodeTemplate::rename_child_impl(
+                    &mut self.root_nodes,
+                    old_name,
+                    new_name.clone(),
+                ) {
                     return false;
                 }
             }
@@ -552,7 +555,12 @@ impl LayoutTemplate {
         true
     }
 
-    pub fn move_node(&mut self, old_path: impl AsRef<Utf8Path>, new_path: impl AsRef<Utf8Path>, pos: MoveNodePosition) {
+    pub fn move_node(
+        &mut self,
+        old_path: impl AsRef<Utf8Path>,
+        new_path: impl AsRef<Utf8Path>,
+        pos: MoveNodePosition,
+    ) {
         let old_path = old_path.as_ref();
         let new_path = new_path.as_ref();
 
@@ -587,30 +595,29 @@ impl LayoutTemplate {
 
                 match pos {
                     MoveNodePosition::First => assert!(parent_node.insert_child_first(node)),
-                    MoveNodePosition::Before(name) => assert!(parent_node.insert_child_before(node, name)),
-                    MoveNodePosition::After(name) => assert!(parent_node.insert_child_after(node, name)),
+                    MoveNodePosition::Before(name) => {
+                        assert!(parent_node.insert_child_before(node, name))
+                    }
+                    MoveNodePosition::After(name) => {
+                        assert!(parent_node.insert_child_after(node, name))
+                    }
                     MoveNodePosition::Last => assert!(parent_node.add_child(node)),
                 }
             }
-            None => {
-                match pos {
-                    MoveNodePosition::First => assert!(self.insert_child_first(node)),
-                    MoveNodePosition::Before(name) => assert!(self.insert_child_before(node, name)),
-                    MoveNodePosition::After(name) => assert!(self.insert_child_after(node, name)),
-                    MoveNodePosition::Last => self.add_child(node),
-                }
-            }
+            None => match pos {
+                MoveNodePosition::First => assert!(self.insert_child_first(node)),
+                MoveNodePosition::Before(name) => assert!(self.insert_child_before(node, name)),
+                MoveNodePosition::After(name) => assert!(self.insert_child_after(node, name)),
+                MoveNodePosition::Last => self.add_child(node),
+            },
         }
 
         for (_, animation) in self.animations.iter_mut() {
-            animation
-                .node_animations
-                .iter_mut()
-                .for_each(|anim| {
-                    if anim.node_path == old_path.as_str() {
-                        anim.node_path = new_path.to_string();
-                    }
-                });
+            animation.node_animations.iter_mut().for_each(|anim| {
+                if anim.node_path == old_path.as_str() {
+                    anim.node_path = new_path.to_string();
+                }
+            });
         }
     }
 

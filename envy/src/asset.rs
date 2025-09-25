@@ -304,14 +304,12 @@ mod v010 {
 
     pub(super) fn deserialize<B: EnvyBackend + EnvyAssetProvider>(
         backend: &mut B,
-        reader: &mut std::io::Cursor<&[u8]>
+        reader: &mut std::io::Cursor<&[u8]>,
     ) -> crate::LayoutRoot<B> {
         let mut asset: Asset =
             bincode::decode_from_std_read(reader, bincode::config::standard()).unwrap();
 
-
         let mut root_template = LayoutTemplate::default();
-
 
         fn produce_children_and_deserialize<B: EnvyBackend + EnvyAssetProvider>(
             node: Node,
@@ -337,14 +335,22 @@ mod v010 {
                         let (name, data) = images.remove(pos);
                         backend.load_image_bytes_with_name(name, data);
                     }
-                    NodeImplTemplate::Image(ImageNodeTemplate { texture_name: image.resource_name, mask_texture_name: None, })
+                    NodeImplTemplate::Image(ImageNodeTemplate {
+                        texture_name: image.resource_name,
+                        mask_texture_name: None,
+                    })
                 }
                 NodeImplementationV010::Text(text) => {
                     if let Some(pos) = fonts.iter().position(|(name, _)| name.eq(&text.font_name)) {
                         let (name, data) = fonts.remove(pos);
                         backend.load_font_bytes_with_name(name, data);
                     }
-                    NodeImplTemplate::Text(TextNodeTemplate { font_name: text.font_name, text: text.text, font_size: text.font_size, line_height: text.line_height })
+                    NodeImplTemplate::Text(TextNodeTemplate {
+                        font_name: text.font_name,
+                        text: text.text,
+                        font_size: text.font_size,
+                        line_height: text.line_height,
+                    })
                 }
             };
 
@@ -353,7 +359,10 @@ mod v010 {
                 transform: transform.into(),
                 color,
                 implementation,
-                children: children.into_iter().map(|child| produce_children_and_deserialize(child, images, fonts, backend)).collect()
+                children: children
+                    .into_iter()
+                    .map(|child| produce_children_and_deserialize(child, images, fonts, backend))
+                    .collect(),
             }
         }
 
@@ -366,7 +375,12 @@ mod v010 {
             ));
         }
 
-        root_template.animations = asset.animations.into_iter().filter(|(name, _)| !name.is_empty()).map(|(name, animation)| (name, animation.into())).collect();
+        root_template.animations = asset
+            .animations
+            .into_iter()
+            .filter(|(name, _)| !name.is_empty())
+            .map(|(name, animation)| (name, animation.into()))
+            .collect();
 
         crate::LayoutRoot::from_root_template(root_template, [])
     }
@@ -376,7 +390,7 @@ mod v020 {
     use super::*;
     use std::io::Cursor;
 
-    use crate::{template::NodeTemplate, animations::Animation};
+    use crate::{animations::Animation, template::NodeTemplate};
     #[derive(bincode::Encode, bincode::Decode)]
     struct LayoutTemplate {
         root_nodes: Vec<NodeTemplate>,
@@ -403,13 +417,17 @@ mod v020 {
 
     pub(super) fn deserialize<B: EnvyBackend + EnvyAssetProvider>(
         backend: &mut B,
-        reader: &mut Cursor<&[u8]>
+        reader: &mut Cursor<&[u8]>,
     ) -> crate::LayoutRoot<B> {
-        let asset: Asset = bincode::decode_from_std_read(reader, bincode::config::standard()).unwrap();
+        let asset: Asset =
+            bincode::decode_from_std_read(reader, bincode::config::standard()).unwrap();
 
         let root_template = crate::LayoutTemplate::from(asset.root_template);
 
-        let templates = asset.templates.into_iter().map(|(name, template)| (name, crate::LayoutTemplate::from(template)));
+        let templates = asset
+            .templates
+            .into_iter()
+            .map(|(name, template)| (name, crate::LayoutTemplate::from(template)));
 
         let root = crate::LayoutRoot::from_root_template(root_template, templates);
 
@@ -479,7 +497,11 @@ mod v021 {
             Self {
                 canvas_size: value.canvas_size,
                 root_nodes: value.root_nodes,
-                animations: value.animations.into_iter().map(|(name, anim)| (name, anim.into())).collect(),
+                animations: value
+                    .animations
+                    .into_iter()
+                    .map(|(name, anim)| (name, anim.into()))
+                    .collect(),
             }
         }
     }
@@ -494,13 +516,17 @@ mod v021 {
 
     pub(super) fn deserialize<B: EnvyBackend + EnvyAssetProvider>(
         backend: &mut B,
-        reader: &mut Cursor<&[u8]>
+        reader: &mut Cursor<&[u8]>,
     ) -> crate::LayoutRoot<B> {
-        let asset: Asset = bincode::decode_from_std_read(reader, bincode::config::standard()).unwrap();
+        let asset: Asset =
+            bincode::decode_from_std_read(reader, bincode::config::standard()).unwrap();
 
         let root_template = crate::LayoutTemplate::from(asset.root_template);
 
-        let templates = asset.templates.into_iter().map(|(name, template)| (name, crate::LayoutTemplate::from(template)));
+        let templates = asset
+            .templates
+            .into_iter()
+            .map(|(name, template)| (name, crate::LayoutTemplate::from(template)));
 
         let root = crate::LayoutRoot::from_root_template(root_template, templates);
 
@@ -521,8 +547,7 @@ mod v030 {
 
     use crate::{Animation, NodeTransform, SublayoutNodeTemplate, TextNodeTemplate};
 
-    #[derive(bincode::Encode, bincode::Decode)]
-    #[derive(Clone)]
+    #[derive(bincode::Encode, bincode::Decode, Clone)]
     struct ImageNodeTemplate {
         pub texture_name: String,
     }
@@ -536,8 +561,7 @@ mod v030 {
         }
     }
 
-    #[derive(bincode::Encode, bincode::Decode)]
-    #[derive(Clone)]
+    #[derive(bincode::Encode, bincode::Decode, Clone)]
     enum NodeImplTemplate {
         Empty,
         Image(ImageNodeTemplate),
@@ -552,13 +576,12 @@ mod v030 {
                 N::Empty => Self::Empty,
                 N::Image(image) => Self::Image(image.into()),
                 N::Text(text) => Self::Text(text),
-                N::Sublayout(sublayout) => Self::Sublayout(sublayout)
+                N::Sublayout(sublayout) => Self::Sublayout(sublayout),
             }
         }
     }
 
-    #[derive(Clone)]
-    #[derive(bincode::Encode, bincode::Decode)]
+    #[derive(Clone, bincode::Encode, bincode::Decode)]
     struct NodeTemplate {
         name: String,
         transform: NodeTransform,
@@ -574,7 +597,7 @@ mod v030 {
                 transform: value.transform,
                 color: value.color,
                 children: value.children.into_iter().map(Into::into).collect(),
-                implementation: value.implementation.into()
+                implementation: value.implementation.into(),
             }
         }
     }
@@ -591,7 +614,11 @@ mod v030 {
             Self {
                 canvas_size: value.canvas_size,
                 root_nodes: value.root_nodes.into_iter().map(Into::into).collect(),
-                animations: value.animations.into_iter().map(|(name, anim)| (name, anim.into())).collect(),
+                animations: value
+                    .animations
+                    .into_iter()
+                    .map(|(name, anim)| (name, anim.into()))
+                    .collect(),
             }
         }
     }
@@ -606,13 +633,17 @@ mod v030 {
 
     pub(super) fn deserialize<B: crate::EnvyBackend + super::EnvyAssetProvider>(
         backend: &mut B,
-        reader: &mut Cursor<&[u8]>
+        reader: &mut Cursor<&[u8]>,
     ) -> crate::LayoutRoot<B> {
-        let asset: Asset = bincode::decode_from_std_read(reader, bincode::config::standard()).unwrap();
+        let asset: Asset =
+            bincode::decode_from_std_read(reader, bincode::config::standard()).unwrap();
 
         let root_template = crate::LayoutTemplate::from(asset.root_template);
 
-        let templates = asset.templates.into_iter().map(|(name, template)| (name, crate::LayoutTemplate::from(template)));
+        let templates = asset
+            .templates
+            .into_iter()
+            .map(|(name, template)| (name, crate::LayoutTemplate::from(template)));
 
         let root = crate::LayoutRoot::from_root_template(root_template, templates);
 
@@ -655,34 +686,50 @@ pub fn serialize<B: EnvyBackend + EnvyAssetProvider>(
         images: vec![],
         fonts: vec![],
         templates: vec![],
-        root_template: LayoutTemplate::default()
+        root_template: LayoutTemplate::default(),
     };
 
-    asset.templates = root.templates().into_iter().map(|(name, template)| (name.to_string(), template.clone())).collect::<Vec<_>>();
+    asset.templates = root
+        .templates()
+        .into_iter()
+        .map(|(name, template)| (name.to_string(), template.clone()))
+        .collect::<Vec<_>>();
     asset.root_template = root.root_template().clone();
 
-    for template in [&asset.root_template].into_iter().chain(asset.templates.iter().map(|(_, template)| template)) {
-        template.walk_tree(|node| {
-            match &node.implementation {
-                NodeImplTemplate::Image(image) => {
-                    if !serialized_images.contains(&image.texture_name) {
-                        serialized_images.insert(image.texture_name.clone());
-                        asset.images.push((image.texture_name.clone(), backend.fetch_image_bytes_by_name(&image.texture_name).to_vec()))
-                    }
+    for template in [&asset.root_template]
+        .into_iter()
+        .chain(asset.templates.iter().map(|(_, template)| template))
+    {
+        template.walk_tree(|node| match &node.implementation {
+            NodeImplTemplate::Image(image) => {
+                if !serialized_images.contains(&image.texture_name) {
+                    serialized_images.insert(image.texture_name.clone());
+                    asset.images.push((
+                        image.texture_name.clone(),
+                        backend
+                            .fetch_image_bytes_by_name(&image.texture_name)
+                            .to_vec(),
+                    ))
+                }
 
-                    if let Some(mask_name) = image.mask_texture_name.as_ref() {
-                        if !serialized_images.contains(mask_name) {
-                            serialized_images.insert(mask_name.clone());
-                            asset.images.push((mask_name.clone(), backend.fetch_image_bytes_by_name(&mask_name).to_vec()))
-                        }
+                if let Some(mask_name) = image.mask_texture_name.as_ref() {
+                    if !serialized_images.contains(mask_name) {
+                        serialized_images.insert(mask_name.clone());
+                        asset.images.push((
+                            mask_name.clone(),
+                            backend.fetch_image_bytes_by_name(&mask_name).to_vec(),
+                        ))
                     }
-                },
-                NodeImplTemplate::Text(text) if !serialized_fonts.contains(&text.font_name) => {
-                    serialized_fonts.insert(text.font_name.clone());
-                    asset.fonts.push((text.font_name.clone(), backend.fetch_font_bytes_by_name(&text.font_name).to_vec()))
-                },
-                _ => {}
+                }
             }
+            NodeImplTemplate::Text(text) if !serialized_fonts.contains(&text.font_name) => {
+                serialized_fonts.insert(text.font_name.clone());
+                asset.fonts.push((
+                    text.font_name.clone(),
+                    backend.fetch_font_bytes_by_name(&text.font_name).to_vec(),
+                ))
+            }
+            _ => {}
         })
     }
 
@@ -697,7 +744,6 @@ pub fn serialize<B: EnvyBackend + EnvyAssetProvider>(
         bincode::encode_into_std_write(asset, &mut output, bincode::config::standard()).unwrap();
     output.into_inner()
 }
-
 
 pub fn deserialize<B: EnvyBackend + EnvyAssetProvider>(
     backend: &mut B,
@@ -719,7 +765,8 @@ pub fn deserialize<B: EnvyBackend + EnvyAssetProvider>(
 
     assert_eq!(version, Version::current());
 
-    let asset: Asset = bincode::decode_from_std_read(&mut reader, bincode::config::standard()).unwrap();
+    let asset: Asset =
+        bincode::decode_from_std_read(&mut reader, bincode::config::standard()).unwrap();
 
     let root = crate::LayoutRoot::from_root_template(asset.root_template, asset.templates);
 

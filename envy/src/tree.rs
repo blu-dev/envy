@@ -4,7 +4,11 @@ use camino::Utf8Path;
 use glam::{Affine2, Vec2};
 
 use crate::{
-    animations::Animation, backend, node::{Anchor, NodeParent, ObservedNode, PropagationArgs}, template::{LayoutTemplate, NodeImplTemplate, NodeTemplate}, EnvyBackend, NodeItem, NodeTransform, SublayoutNode
+    animations::Animation,
+    backend,
+    node::{Anchor, NodeParent, ObservedNode, PropagationArgs},
+    template::{LayoutTemplate, NodeImplTemplate, NodeTemplate},
+    EnvyBackend, NodeItem, NodeTransform, SublayoutNode,
 };
 
 pub struct LayoutRoot<B: EnvyBackend> {
@@ -14,14 +18,20 @@ pub struct LayoutRoot<B: EnvyBackend> {
 }
 
 impl<B: EnvyBackend> LayoutRoot<B> {
-    fn validate_template_recursive(template: &NodeTemplate, templates: &HashMap<String, LayoutTemplate>, visited_layouts: &mut HashSet<String>) {
+    fn validate_template_recursive(
+        template: &NodeTemplate,
+        templates: &HashMap<String, LayoutTemplate>,
+        visited_layouts: &mut HashSet<String>,
+    ) {
         if let NodeImplTemplate::Sublayout(sublayout) = &template.implementation {
             if visited_layouts.contains(&sublayout.sublayout_name) {
                 panic!("Template {} is recursive", sublayout.sublayout_name);
             }
 
             visited_layouts.insert(sublayout.sublayout_name.clone());
-            let layout = templates.get(&sublayout.sublayout_name).unwrap_or_else(|| panic!("Template {} is missing", sublayout.sublayout_name));
+            let layout = templates
+                .get(&sublayout.sublayout_name)
+                .unwrap_or_else(|| panic!("Template {} is missing", sublayout.sublayout_name));
             for node in layout.root_nodes.iter() {
                 Self::validate_template_recursive(node, templates, visited_layouts);
             }
@@ -33,20 +43,27 @@ impl<B: EnvyBackend> LayoutRoot<B> {
         }
     }
 
-    pub fn from_root_template(template: LayoutTemplate, templates: impl IntoIterator<Item = (String, LayoutTemplate)>) -> Self {
+    pub fn from_root_template(
+        template: LayoutTemplate,
+        templates: impl IntoIterator<Item = (String, LayoutTemplate)>,
+    ) -> Self {
         let mut this = Self {
             root_layout: LayoutTree::new(),
             root_template: template,
             templates: templates.into_iter().collect(),
         };
 
-        this.templates.insert("".to_string(), LayoutTemplate::default());
+        this.templates
+            .insert("".to_string(), LayoutTemplate::default());
         let tree = LayoutTree::from_template(&this.root_template, &this);
         this.root_layout = tree;
 
         let mut visited = HashSet::new();
 
-        for template in [&this.root_template].into_iter().chain(this.templates.values()) {
+        for template in [&this.root_template]
+            .into_iter()
+            .chain(this.templates.values())
+        {
             for node in template.root_nodes.iter() {
                 Self::validate_template_recursive(node, &this.templates, &mut visited);
             }
@@ -62,7 +79,10 @@ impl<B: EnvyBackend> LayoutRoot<B> {
     fn validate_template_on_insert(&self, node: &NodeTemplate) {
         if let NodeImplTemplate::Sublayout(sublayout) = &node.implementation {
             if !self.templates.contains_key(&sublayout.sublayout_name) {
-                panic!("Sublayout template cannot reference other template which does not exist: {}", sublayout.sublayout_name);
+                panic!(
+                    "Sublayout template cannot reference other template which does not exist: {}",
+                    sublayout.sublayout_name
+                );
             }
         }
 
@@ -71,13 +91,24 @@ impl<B: EnvyBackend> LayoutRoot<B> {
         }
     }
 
-    fn sync_template_inner(tree: &mut LayoutTree<B>, template: &LayoutTemplate, templates: &HashMap<String, LayoutTemplate>, backend: &mut B) {
+    fn sync_template_inner(
+        tree: &mut LayoutTree<B>,
+        template: &LayoutTemplate,
+        templates: &HashMap<String, LayoutTemplate>,
+        backend: &mut B,
+    ) {
         tree.visit_roots_mut(|root| root.release(backend));
         *tree = LayoutTree::from_template_with_root_templates(template, templates);
         tree.visit_roots_mut(|root| root.setup(backend));
     }
 
-    fn sync_template_inner_by_path(tree: &mut LayoutTree<B>, template: &LayoutTemplate, templates: &HashMap<String, LayoutTemplate>, path: &Utf8Path, backend: &mut B) {
+    fn sync_template_inner_by_path(
+        tree: &mut LayoutTree<B>,
+        template: &LayoutTemplate,
+        templates: &HashMap<String, LayoutTemplate>,
+        path: &Utf8Path,
+        backend: &mut B,
+    ) {
         let node = tree.get_node_by_path_mut(path).unwrap();
         let template_node = template.get_node_by_path(path).unwrap();
         node.release(backend);
@@ -86,11 +117,22 @@ impl<B: EnvyBackend> LayoutRoot<B> {
     }
 
     pub fn sync_root_template(&mut self, backend: &mut B) {
-        Self::sync_template_inner(&mut self.root_layout, &self.root_template, &self.templates, backend)
+        Self::sync_template_inner(
+            &mut self.root_layout,
+            &self.root_template,
+            &self.templates,
+            backend,
+        )
     }
 
     pub fn sync_root_template_by_path(&mut self, path: impl AsRef<Utf8Path>, backend: &mut B) {
-        Self::sync_template_inner_by_path(&mut self.root_layout, &self.root_template, &self.templates, path.as_ref(), backend)
+        Self::sync_template_inner_by_path(
+            &mut self.root_layout,
+            &self.root_template,
+            &self.templates,
+            path.as_ref(),
+            backend,
+        )
     }
 
     pub fn sync_template(&mut self, template_name: impl AsRef<str>, backend: &mut B) {
@@ -100,13 +142,23 @@ impl<B: EnvyBackend> LayoutRoot<B> {
         self.root_layout.walk_tree_mut(|node| {
             if let Some(sublayout) = node.downcast_mut::<SublayoutNode<B>>() {
                 if sublayout.reference() == name {
-                    Self::sync_template_inner(sublayout.as_layout_mut(), template, &self.templates, backend);
+                    Self::sync_template_inner(
+                        sublayout.as_layout_mut(),
+                        template,
+                        &self.templates,
+                        backend,
+                    );
                 }
             }
         });
     }
 
-    pub fn sync_template_by_path(&mut self, template_name: impl AsRef<str>, path: impl AsRef<Utf8Path>, backend: &mut B) {
+    pub fn sync_template_by_path(
+        &mut self,
+        template_name: impl AsRef<str>,
+        path: impl AsRef<Utf8Path>,
+        backend: &mut B,
+    ) {
         let name = template_name.as_ref();
         let path = path.as_ref();
         let template = self.templates.get(name).unwrap();
@@ -114,7 +166,13 @@ impl<B: EnvyBackend> LayoutRoot<B> {
         self.root_layout.walk_tree_mut(|node| {
             if let Some(sublayout) = node.downcast_mut::<SublayoutNode<B>>() {
                 if sublayout.reference() == name {
-                    Self::sync_template_inner_by_path(sublayout.as_layout_mut(), template, &self.templates, path, backend);
+                    Self::sync_template_inner_by_path(
+                        sublayout.as_layout_mut(),
+                        template,
+                        &self.templates,
+                        path,
+                        backend,
+                    );
                 }
             }
         });
@@ -137,7 +195,9 @@ impl<B: EnvyBackend> LayoutRoot<B> {
     }
 
     pub fn templates(&self) -> impl IntoIterator<Item = (&str, &LayoutTemplate)> {
-        self.templates.iter().map(|(name, template)| (name.as_str(), template))
+        self.templates
+            .iter()
+            .map(|(name, template)| (name.as_str(), template))
     }
 
     pub fn add_template(&mut self, template_name: impl Into<String>, template: LayoutTemplate) {
@@ -159,10 +219,16 @@ impl<B: EnvyBackend> LayoutRoot<B> {
             }
         }
 
-        node.visit_children_mut(|child| Self::rename_sublayout_reference(child, old_name, new_name));
+        node.visit_children_mut(|child| {
+            Self::rename_sublayout_reference(child, old_name, new_name)
+        });
     }
 
-    fn rename_sublayout_reference_in_template(node: &mut NodeTemplate, old_name: &str, new_name: &str) {
+    fn rename_sublayout_reference_in_template(
+        node: &mut NodeTemplate,
+        old_name: &str,
+        new_name: &str,
+    ) {
         if let NodeImplTemplate::Sublayout(sublayout) = &mut node.implementation {
             if sublayout.sublayout_name == old_name {
                 sublayout.sublayout_name = new_name.to_string();
@@ -198,18 +264,26 @@ impl<B: EnvyBackend> LayoutRoot<B> {
         }
     }
 
-    pub fn instantiate_tree_from_template(&self, reference: impl AsRef<str>) -> Option<LayoutTree<B>> {
+    pub fn instantiate_tree_from_template(
+        &self,
+        reference: impl AsRef<str>,
+    ) -> Option<LayoutTree<B>> {
         let template = self.templates.get(reference.as_ref())?;
 
         let mut tree = LayoutTree {
             canvas_size: template.canvas_size.into(),
-            animations: template.animations.iter().map(|(name, animation)| (name.clone(), animation.clone())).collect(),
+            animations: template
+                .animations
+                .iter()
+                .map(|(name, animation)| (name.clone(), animation.clone()))
+                .collect(),
             playing_animations: HashMap::new(),
             root_children: Vec::with_capacity(template.root_nodes.len()),
         };
 
         for node in template.root_nodes.iter() {
-            tree.root_children.push(ObservedNode::new(NodeItem::from_template(node, self)));
+            tree.root_children
+                .push(ObservedNode::new(NodeItem::from_template(node, self)));
         }
 
         Some(tree)
@@ -224,8 +298,7 @@ impl<B: EnvyBackend> LayoutRoot<B> {
     }
 
     pub fn setup(&mut self, backend: &mut B) {
-        self
-            .root_layout
+        self.root_layout
             .root_children
             .iter_mut()
             .for_each(|child| child.node.setup(backend));
@@ -264,16 +337,36 @@ pub struct LayoutTree<B: EnvyBackend> {
 }
 
 impl<B: EnvyBackend> LayoutTree<B> {
-    pub(crate) fn from_template_with_root_templates(template: &LayoutTemplate, templates: &HashMap<String, LayoutTemplate>) -> Self {
+    pub(crate) fn from_template_with_root_templates(
+        template: &LayoutTemplate,
+        templates: &HashMap<String, LayoutTemplate>,
+    ) -> Self {
         Self {
             canvas_size: template.canvas_size.into(),
-            animations: template.animations.iter().map(|(name, anim)| (name.clone(), anim.clone())).collect(),
+            animations: template
+                .animations
+                .iter()
+                .map(|(name, anim)| (name.clone(), anim.clone()))
+                .collect(),
             playing_animations: HashMap::new(),
-            root_children: template.root_nodes.iter().map(|template| ObservedNode::new(NodeItem::from_template_with_root_templates(template, templates))).collect(),
+            root_children: template
+                .root_nodes
+                .iter()
+                .map(|template| {
+                    ObservedNode::new(NodeItem::from_template_with_root_templates(
+                        template, templates,
+                    ))
+                })
+                .collect(),
         }
     }
 
-    pub fn sync_to_template(&mut self, template: &LayoutTemplate, root: &LayoutRoot<B>, backend: &mut B) {
+    pub fn sync_to_template(
+        &mut self,
+        template: &LayoutTemplate,
+        root: &LayoutRoot<B>,
+        backend: &mut B,
+    ) {
         self.visit_roots_mut(|root| root.release(backend));
         *self = Self::from_template(template, root);
         self.setup(backend);
@@ -313,8 +406,7 @@ impl<B: EnvyBackend> LayoutTree<B> {
     }
 
     pub fn setup(&mut self, backend: &mut B) {
-        self
-            .root_children
+        self.root_children
             .iter_mut()
             .for_each(|child| child.node.setup(backend));
     }
@@ -324,15 +416,13 @@ impl<B: EnvyBackend> LayoutTree<B> {
     }
 
     pub fn prepare(&mut self, backend: &mut B) {
-        self
-            .root_children
+        self.root_children
             .iter_mut()
             .for_each(|child| child.node.prepare(backend));
     }
 
     pub fn render(&self, backend: &B, render_pass: &mut B::RenderPass<'_>) {
-        self
-            .root_children
+        self.root_children
             .iter()
             .for_each(|child| child.node.render(backend, render_pass));
     }
@@ -371,7 +461,10 @@ impl<B: EnvyBackend> LayoutTree<B> {
     pub fn sync_to_animation_keyframe(&mut self, animation_name: &str, keyframe: usize) {
         if let Some(animation) = self.animations.get(animation_name) {
             for node_anim in animation.node_animations.iter() {
-                let Some(node) = Self::get_node_by_path_mut_impl(&mut self.root_children, Utf8Path::new(&node_anim.node_path)) else {
+                let Some(node) = Self::get_node_by_path_mut_impl(
+                    &mut self.root_children,
+                    Utf8Path::new(&node_anim.node_path),
+                ) else {
                     continue;
                 };
 
@@ -382,20 +475,30 @@ impl<B: EnvyBackend> LayoutTree<B> {
         }
     }
 
-    pub fn propagate_with_root_transform(&mut self, transform: &NodeTransform, affine: &Affine2, changed: bool) {
+    pub fn propagate_with_root_transform(
+        &mut self,
+        transform: &NodeTransform,
+        affine: &Affine2,
+        changed: bool,
+    ) {
         let this_scale = transform.scale * transform.size / self.canvas_size.as_vec2();
         let actual_size = transform.size * this_scale;
 
         let parent_anchor_to_origin = transform.size * transform.anchor.as_vec();
         let self_translation = parent_anchor_to_origin;
         let center = self_translation + -transform.anchor.as_vec() * actual_size;
-        let affine = *affine * Affine2::from_scale_angle_translation(transform.size / self.canvas_size.as_vec2(), 0.0, center);
+        let affine = *affine
+            * Affine2::from_scale_angle_translation(
+                transform.size / self.canvas_size.as_vec2(),
+                0.0,
+                center,
+            );
 
         self.root_children.iter_mut().for_each(|child| {
             child.node.propagate(PropagationArgs {
                 transform,
                 affine: &affine,
-                changed
+                changed,
             })
         });
     }
@@ -475,10 +578,7 @@ impl<B: EnvyBackend> LayoutTree<B> {
         None
     }
 
-    pub fn get_node_by_path_mut(
-        &mut self,
-        path: impl AsRef<Utf8Path>,
-    ) -> Option<&mut NodeItem<B>> {
+    pub fn get_node_by_path_mut(&mut self, path: impl AsRef<Utf8Path>) -> Option<&mut NodeItem<B>> {
         Self::get_node_by_path_mut_impl(&mut self.root_children, path.as_ref())
     }
 

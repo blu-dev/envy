@@ -9,12 +9,16 @@ mod tree;
 pub use animations::{
     Animation, AnimationChannel, AnimationTransform, NodeAnimation, TransformStep,
 };
-pub use backend::{EnvyBackend, PreparedGlyph, TextLayoutArgs, DrawTextureArgs};
+pub use backend::{DrawTextureArgs, EnvyBackend, PreparedGlyph, TextLayoutArgs};
 pub use node::{
-    EmptyNode, ImageNode, Node, NodeDisjointAccessor, NodeItem, NodeTransform, TextNode, SublayoutNode
+    EmptyNode, ImageNode, Node, NodeDisjointAccessor, NodeItem, NodeTransform, SublayoutNode,
+    TextNode,
 };
-pub use template::{NodeImplTemplate, NodeTemplate, LayoutTemplate, TextNodeTemplate, ImageNodeTemplate, SublayoutNodeTemplate, MoveNodePosition};
-pub use tree::{LayoutTree, LayoutRoot};
+pub use template::{
+    ImageNodeTemplate, LayoutTemplate, MoveNodePosition, NodeImplTemplate, NodeTemplate,
+    SublayoutNodeTemplate, TextNodeTemplate,
+};
+pub use tree::{LayoutRoot, LayoutTree};
 
 use bytemuck::{Pod, Zeroable};
 
@@ -59,7 +63,7 @@ unsafe impl Zeroable for DrawUniform {
             model_matrix: glam::Mat4::zeroed(),
             color: glam::Vec4::zeroed(),
             model_i_matrix: glam::Mat4::zeroed(),
-            _alignment: [0u8; 0x70]
+            _alignment: [0u8; 0x70],
         }
     }
 }

@@ -11,7 +11,7 @@ impl<B: EnvyBackend> SublayoutNode<B> {
     pub fn new(reference: impl Into<String>, tree: LayoutTree<B>) -> Self {
         Self {
             reference: reference.into(),
-            tree
+            tree,
         }
     }
 
@@ -31,8 +31,14 @@ impl<B: EnvyBackend> SublayoutNode<B> {
         &mut self.tree
     }
 
-    pub(crate) fn propagate_with_root_transform(&mut self, transform: &NodeTransform, affine: &Affine2, changed: bool) {
-        self.tree.propagate_with_root_transform(transform, affine, changed);
+    pub(crate) fn propagate_with_root_transform(
+        &mut self,
+        transform: &NodeTransform,
+        affine: &Affine2,
+        changed: bool,
+    ) {
+        self.tree
+            .propagate_with_root_transform(transform, affine, changed);
     }
 }
 

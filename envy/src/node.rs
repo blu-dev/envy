@@ -1,17 +1,24 @@
-use crate::{template::{NodeImplTemplate, NodeTemplate}, EnvyBackend, EnvyMaybeSendSync, LayoutRoot, LayoutTemplate, LayoutTree};
+use crate::{
+    template::{NodeImplTemplate, NodeTemplate},
+    EnvyBackend, EnvyMaybeSendSync, LayoutRoot, LayoutTemplate, LayoutTree,
+};
 use glam::{Affine2, Mat4, Vec2, Vec4};
 use serde::{Deserialize, Serialize};
 use std::{
-    any::Any, collections::HashMap, marker::PhantomData, ops::Deref, sync::atomic::{AtomicUsize, Ordering}
+    any::Any,
+    collections::HashMap,
+    marker::PhantomData,
+    ops::Deref,
+    sync::atomic::{AtomicUsize, Ordering},
 };
 
 mod image;
-mod text;
 mod sublayout;
+mod text;
 
 pub use image::ImageNode;
-pub use text::TextNode;
 pub use sublayout::SublayoutNode;
+pub use text::TextNode;
 
 #[doc(hidden)]
 mod __sealed {
@@ -500,8 +507,10 @@ pub trait NodeUpdateCallback<B: EnvyBackend>: EnvyMaybeSendSync + 'static {
     fn update(&mut self, node: NodeDisjointAccessor<'_, B>);
 }
 
-impl<B: EnvyBackend, F: for<'a> FnMut(NodeDisjointAccessor<'a, B>) + EnvyMaybeSendSync + 'static>
-    NodeUpdateCallback<B> for F
+impl<
+        B: EnvyBackend,
+        F: for<'a> FnMut(NodeDisjointAccessor<'a, B>) + EnvyMaybeSendSync + 'static,
+    > NodeUpdateCallback<B> for F
 {
     fn update(&mut self, node: NodeDisjointAccessor<'_, B>) {
         (self)(node)
@@ -520,10 +529,21 @@ pub struct NodeItem<B: EnvyBackend> {
 }
 
 impl<B: EnvyBackend> NodeItem<B> {
-    pub(crate) fn from_template_with_root_templates(template: &NodeTemplate, templates: &HashMap<String, LayoutTemplate>) -> Self {
+    pub(crate) fn from_template_with_root_templates(
+        template: &NodeTemplate,
+        templates: &HashMap<String, LayoutTemplate>,
+    ) -> Self {
         Self {
             name: template.name.clone(),
-            children: template.children.iter().map(|child| ObservedNode::new(NodeItem::from_template_with_root_templates(child, templates))).collect::<Vec<_>>(),
+            children: template
+                .children
+                .iter()
+                .map(|child| {
+                    ObservedNode::new(NodeItem::from_template_with_root_templates(
+                        child, templates,
+                    ))
+                })
+                .collect::<Vec<_>>(),
             transform: template.transform,
             color: template.color,
             affine: Affine2::IDENTITY,
@@ -534,18 +554,33 @@ impl<B: EnvyBackend> NodeItem<B> {
                     let mut node = ImageNode::new(&image.texture_name);
                     node.set_mask_texture_name(image.mask_texture_name.clone());
                     Box::new(node)
-                },
-                NodeImplTemplate::Text(text) => Box::new(TextNode::new(&text.font_name, text.font_size, text.line_height, &text.text)),
-                NodeImplTemplate::Sublayout(sublayout) => Box::new(SublayoutNode::new(&sublayout.sublayout_name, LayoutTree::from_template_with_root_templates(templates.get(&sublayout.sublayout_name).unwrap(), templates))),
+                }
+                NodeImplTemplate::Text(text) => Box::new(TextNode::new(
+                    &text.font_name,
+                    text.font_size,
+                    text.line_height,
+                    &text.text,
+                )),
+                NodeImplTemplate::Sublayout(sublayout) => Box::new(SublayoutNode::new(
+                    &sublayout.sublayout_name,
+                    LayoutTree::from_template_with_root_templates(
+                        templates.get(&sublayout.sublayout_name).unwrap(),
+                        templates,
+                    ),
+                )),
             },
-            update: vec![]
+            update: vec![],
         }
     }
 
     pub fn from_template(template: &NodeTemplate, root: &LayoutRoot<B>) -> Self {
         Self {
             name: template.name.clone(),
-            children: template.children.iter().map(|child| ObservedNode::new(NodeItem::from_template(child, root))).collect::<Vec<_>>(),
+            children: template
+                .children
+                .iter()
+                .map(|child| ObservedNode::new(NodeItem::from_template(child, root)))
+                .collect::<Vec<_>>(),
             transform: template.transform,
             color: template.color,
             affine: Affine2::IDENTITY,
@@ -553,10 +588,19 @@ impl<B: EnvyBackend> NodeItem<B> {
             node: match &template.implementation {
                 NodeImplTemplate::Empty => Box::new(EmptyNode),
                 NodeImplTemplate::Image(image) => Box::new(ImageNode::new(&image.texture_name)),
-                NodeImplTemplate::Text(text) => Box::new(TextNode::new(&text.font_name, text.font_size, text.line_height, &text.text)),
-                NodeImplTemplate::Sublayout(sublayout) => Box::new(SublayoutNode::new(&sublayout.sublayout_name, root.instantiate_tree_from_template(&sublayout.sublayout_name).unwrap())),
+                NodeImplTemplate::Text(text) => Box::new(TextNode::new(
+                    &text.font_name,
+                    text.font_size,
+                    text.line_height,
+                    &text.text,
+                )),
+                NodeImplTemplate::Sublayout(sublayout) => Box::new(SublayoutNode::new(
+                    &sublayout.sublayout_name,
+                    root.instantiate_tree_from_template(&sublayout.sublayout_name)
+                        .unwrap(),
+                )),
             },
-            update: vec![]
+            update: vec![],
         }
     }
 
@@ -808,7 +852,9 @@ impl<B: EnvyBackend> NodeItem<B> {
 
     pub(crate) fn release(&mut self, backend: &mut B) {
         self.node.release_resources(backend);
-        self.children.iter_mut().for_each(|child| child.node.release(backend));
+        self.children
+            .iter_mut()
+            .for_each(|child| child.node.release(backend));
     }
 
     pub(crate) fn propagate(&mut self, parent: PropagationArgs<'_>) {

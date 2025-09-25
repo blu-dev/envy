@@ -9,14 +9,15 @@ use bitvec::vec::BitVec;
 use bytemuck::{Pod, Zeroable};
 use camino::Utf8Path;
 use cosmic_text::{
-    CacheKey, Command, Family, FontSystem, Metrics, SwashCache,
     fontdb::{FaceInfo, Source},
+    CacheKey, Command, Family, FontSystem, Metrics, SwashCache,
 };
 use envy::{
-    asset::EnvyAssetProvider, DrawTextureArgs, DrawUniform, EnvyBackend, PreparedGlyph, TextLayoutArgs, ViewUniform
+    asset::EnvyAssetProvider, DrawTextureArgs, DrawUniform, EnvyBackend, PreparedGlyph,
+    TextLayoutArgs, ViewUniform,
 };
 use glam::{Vec3, Vec4};
-use image::{ImageEncoder, codecs::png::PngEncoder};
+use image::{codecs::png::PngEncoder, ImageEncoder};
 use indexmap::IndexMap;
 use lyon::{
     math::point,
@@ -26,7 +27,7 @@ use lyon::{
         GeometryBuilderError, VertexId,
     },
 };
-use wgpu::{RenderPass, util::DeviceExt};
+use wgpu::{util::DeviceExt, RenderPass};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct WgpuTextureHandle(usize);
@@ -149,17 +150,17 @@ impl TextureBackend {
                 size: wgpu::Extent3d {
                     width: 1,
                     height: 1,
-                    depth_or_array_layers: 1
+                    depth_or_array_layers: 1,
                 },
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: wgpu::TextureFormat::Rgba8Unorm,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
-                view_formats: &[]
+                view_formats: &[],
             },
             wgpu::wgt::TextureDataOrder::MipMajor,
-            &[0xFF; 4]
+            &[0xFF; 4],
         );
 
         let default_mask_texture = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -168,13 +169,17 @@ impl TextureBackend {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::Sampler(&device.create_sampler(&Default::default())),
+                    resource: wgpu::BindingResource::Sampler(
+                        &device.create_sampler(&Default::default()),
+                    ),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&default_mask_texture.create_view(&Default::default())),
+                    resource: wgpu::BindingResource::TextureView(
+                        &default_mask_texture.create_view(&Default::default()),
+                    ),
                 },
-            ]
+            ],
         });
 
         let texture_pipeline_layout =
@@ -188,7 +193,6 @@ impl TextureBackend {
             label: Some("envy_texture_shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("./shaders/texture.wgsl").into()),
         });
-
 
         let texture_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("envy_texture_pipeline"),
@@ -251,7 +255,15 @@ impl TextureBackend {
 
         let mut cpu_image_cache = IndexMap::new();
         let mut buffer = std::io::Cursor::new(vec![]);
-        image::write_buffer_with_format(&mut buffer, &default_texture_bytes, 40, 40, image::ExtendedColorType::Rgba8, image::ImageFormat::Png).unwrap();
+        image::write_buffer_with_format(
+            &mut buffer,
+            &default_texture_bytes,
+            40,
+            40,
+            image::ExtendedColorType::Rgba8,
+            image::ImageFormat::Png,
+        )
+        .unwrap();
         cpu_image_cache.insert("".into(), buffer.into_inner());
 
         let mut image_cache = IndexMap::new();
@@ -575,14 +587,16 @@ impl WgpuFontBackend {
         let mut buffer = buffer.borrow_with(&mut self.system);
         buffer.set_size(Some(args.buffer_size.x), Some(args.buffer_size.y));
         buffer.set_rich_text(
-            [
-                (args.text, cosmic_text::Attrs {
+            [(
+                args.text,
+                cosmic_text::Attrs {
                     family: Family::Name(&face.families[0].0),
                     stretch: face.stretch,
                     style: face.style,
                     weight: face.weight,
                     ..cosmic_text::Attrs::new()
-            })],
+                },
+            )],
             &cosmic_text::Attrs {
                 family: Family::Name(&face.families[0].0),
                 stretch: face.stretch,
@@ -591,7 +605,7 @@ impl WgpuFontBackend {
                 ..cosmic_text::Attrs::new()
             },
             cosmic_text::Shaping::Basic,
-            Some(cosmic_text::Align::Center)
+            Some(cosmic_text::Align::Center),
         );
 
         let mut glyphs = vec![];
@@ -886,7 +900,9 @@ impl WgpuBackend {
                 image.as_raw(),
             );
 
-            self.textures.cpu_image_cache.insert(name.to_string().into(), image.to_vec());
+            self.textures
+                .cpu_image_cache
+                .insert(name.to_string().into(), image.to_vec());
 
             self.textures
                 .image_cache
@@ -969,8 +985,15 @@ impl WgpuBackend {
             .insert_before(index, new.to_string().into(), texture);
 
         let index = self.textures.cpu_image_cache.get_index_of(old).unwrap();
-        let texture = self.textures.cpu_image_cache.shift_remove_index(index).unwrap().1;
-        self.textures.cpu_image_cache.insert_before(index, new, texture);
+        let texture = self
+            .textures
+            .cpu_image_cache
+            .shift_remove_index(index)
+            .unwrap()
+            .1;
+        self.textures
+            .cpu_image_cache
+            .insert_before(index, new, texture);
     }
 
     pub fn rename_font(&mut self, old: &str, new: impl Into<String>) {
@@ -1179,7 +1202,8 @@ impl EnvyBackend for WgpuBackend {
         } else {
             let len = self.uniforms.len();
             self.uniform_slots.push(true);
-            self.uniforms.push(DrawUniform::new(glam::Mat4::IDENTITY, glam::Vec4::ONE));
+            self.uniforms
+                .push(DrawUniform::new(glam::Mat4::IDENTITY, glam::Vec4::ONE));
             Some(WgpuUniformHandle(len))
         }
     }
@@ -1189,17 +1213,21 @@ impl EnvyBackend for WgpuBackend {
     }
 
     fn layout_text(&mut self, args: TextLayoutArgs<'_, Self>) -> Vec<PreparedGlyph<Self>> {
-        self.fonts.layout(|| {
-            if let Some(first_available) = self.uniform_slots.first_zero() {
-                self.uniform_slots.set(first_available, true);
-                WgpuUniformHandle(first_available)
-            } else {
-                let len = self.uniforms.len();
-                self.uniform_slots.push(true);
-                self.uniforms.push(DrawUniform::new(glam::Mat4::IDENTITY, glam::Vec4::ONE));
-                WgpuUniformHandle(len)
-            }
-        }, args)
+        self.fonts.layout(
+            || {
+                if let Some(first_available) = self.uniform_slots.first_zero() {
+                    self.uniform_slots.set(first_available, true);
+                    WgpuUniformHandle(first_available)
+                } else {
+                    let len = self.uniforms.len();
+                    self.uniform_slots.push(true);
+                    self.uniforms
+                        .push(DrawUniform::new(glam::Mat4::IDENTITY, glam::Vec4::ONE));
+                    WgpuUniformHandle(len)
+                }
+            },
+            args,
+        )
     }
 
     fn draw_texture(
@@ -1208,14 +1236,21 @@ impl EnvyBackend for WgpuBackend {
         texture: Self::TextureHandle,
         pass: &mut Self::RenderPass<'_>,
     ) {
-        self.draw_texture_ext(uniform, DrawTextureArgs { texture, mask_texture: None }, pass);
+        self.draw_texture_ext(
+            uniform,
+            DrawTextureArgs {
+                texture,
+                mask_texture: None,
+            },
+            pass,
+        );
     }
 
     fn draw_texture_ext(
         &self,
         uniform: Self::UniformHandle,
         args: DrawTextureArgs<Self>,
-        pass: &mut Self::RenderPass<'_>
+        pass: &mut Self::RenderPass<'_>,
     ) {
         pass.set_pipeline(&self.textures.pipeline);
         pass.set_bind_group(
@@ -1224,7 +1259,13 @@ impl EnvyBackend for WgpuBackend {
             &[(uniform.0 * std::mem::size_of::<DrawUniform>()) as wgpu::DynamicOffset],
         );
         pass.set_bind_group(2, &self.textures.textures[args.texture.0].bind_group, &[]);
-        pass.set_bind_group(3, args.mask_texture.map(|texture| &self.textures.textures[texture.0].bind_group).unwrap_or(&self.textures.default_mask_texture), &[]);
+        pass.set_bind_group(
+            3,
+            args.mask_texture
+                .map(|texture| &self.textures.textures[texture.0].bind_group)
+                .unwrap_or(&self.textures.default_mask_texture),
+            &[],
+        );
         pass.set_vertex_buffer(0, self.textures.vertex_buffer.slice(..));
         pass.draw(0..6, 0..1);
     }

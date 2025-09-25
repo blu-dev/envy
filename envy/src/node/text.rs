@@ -3,8 +3,8 @@ use std::any::Any;
 use glam::{Affine2, Vec2};
 
 use crate::{
+    node::{affine2_to_mat4, PreparationArgs},
     DrawUniform, EnvyBackend, Node, PreparedGlyph, TextLayoutArgs,
-    node::{PreparationArgs, affine2_to_mat4},
 };
 
 pub struct TextNode<B: EnvyBackend> {

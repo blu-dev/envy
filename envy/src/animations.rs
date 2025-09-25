@@ -107,14 +107,14 @@ impl<T> AnimationChannel<T> {
             let new_total = total + self.transforms[idx].duration;
 
             match new_total.cmp(&keyframe) {
-                Ordering::Less => {},
+                Ordering::Less => {}
                 Ordering::Equal => {
                     let old_keyframe = self.transforms.remove(idx);
                     if let Some(new_keyframe) = self.transforms.get_mut(idx) {
                         new_keyframe.duration += old_keyframe.duration;
                     }
                     return;
-                }, 
+                }
                 Ordering::Greater => return,
             }
 
@@ -122,19 +122,21 @@ impl<T> AnimationChannel<T> {
         }
     }
 
-    pub fn insert_keyframe(&mut self, keyframe: usize) where T: Interpolatable {
+    pub fn insert_keyframe(&mut self, keyframe: usize)
+    where
+        T: Interpolatable,
+    {
         if keyframe == 0 {
             // idk chief don't fuckin do this
             return;
         }
-
 
         let mut total = 0usize;
         for idx in 0..self.transforms.len() {
             let new_total = total + self.transforms[idx].duration;
 
             match new_total.cmp(&keyframe) {
-                Ordering::Less => {},
+                Ordering::Less => {}
                 Ordering::Equal => return, // again don't do this
                 Ordering::Greater => {
                     let prev = if idx == 0 {
@@ -146,12 +148,15 @@ impl<T> AnimationChannel<T> {
                     let progress = (keyframe - total) as f32 / (new_total - total) as f32;
                     let new_value = T::interpolate(prev, self.transforms[idx].end, progress);
 
-                    self.transforms.insert(idx, AnimationTransform {
-                        end: new_value,
-                        duration: keyframe - total,
-                        first_step: TransformStep::Linear,
-                        additional_steps: vec![]
-                    });
+                    self.transforms.insert(
+                        idx,
+                        AnimationTransform {
+                            end: new_value,
+                            duration: keyframe - total,
+                            first_step: TransformStep::Linear,
+                            additional_steps: vec![],
+                        },
+                    );
                     self.transforms[idx + 1].duration = new_total - keyframe;
                     return;
                 }
@@ -166,7 +171,7 @@ impl<T> AnimationChannel<T> {
             end: value,
             duration,
             first_step: TransformStep::Linear,
-            additional_steps: vec![]
+            additional_steps: vec![],
         });
     }
 
@@ -176,7 +181,7 @@ impl<T> AnimationChannel<T> {
             let new_total = total + self.transforms[idx].duration;
 
             match new_total.cmp(&keyframe) {
-                Ordering::Less => {},
+                Ordering::Less => {}
                 Ordering::Equal | Ordering::Greater => return total,
             }
             total = new_total;
@@ -191,7 +196,7 @@ impl<T> AnimationChannel<T> {
             let new_total = total + self.transforms[idx].duration;
 
             match total.cmp(&keyframe) {
-                Ordering::Less => {},
+                Ordering::Less => {}
                 Ordering::Equal | Ordering::Greater => return new_total,
             }
             total = new_total;
@@ -220,7 +225,8 @@ impl<T> AnimationChannel<T> {
     }
 
     pub fn value_for_frame(&mut self, keyframe: usize) -> T
-        where T: Interpolatable
+    where
+        T: Interpolatable,
     {
         if keyframe == 0 {
             self.start
@@ -231,7 +237,7 @@ impl<T> AnimationChannel<T> {
                 let new_total = total + self.transforms[idx].duration;
 
                 match new_total.cmp(&keyframe) {
-                    Ordering::Less => {},
+                    Ordering::Less => {}
                     Ordering::Equal => return self.transforms[idx].end,
                     Ordering::Greater => {
                         let prev = if idx == 0 {
@@ -241,7 +247,7 @@ impl<T> AnimationChannel<T> {
                         };
 
                         let progress = (keyframe - total) as f32 / (new_total - total) as f32;
-                        return T::interpolate(prev, self.transforms[idx].end, progress)
+                        return T::interpolate(prev, self.transforms[idx].end, progress);
                     }
                 }
 
@@ -273,17 +279,22 @@ const _: () = {
     use glam::Vec2;
 
     impl bincode::Encode for AnimationChannel<f32> {
-        fn encode<E: bincode::enc::Encoder>(&self, encoder: &mut E) -> Result<(), bincode::error::EncodeError> {
+        fn encode<E: bincode::enc::Encoder>(
+            &self,
+            encoder: &mut E,
+        ) -> Result<(), bincode::error::EncodeError> {
             self.start.encode(encoder)?;
             self.transforms.encode(encoder)
         }
     }
 
     impl<C> bincode::Decode<C> for AnimationChannel<f32> {
-        fn decode<D: bincode::de::Decoder<Context = C>>(decoder: &mut D) -> Result<Self, bincode::error::DecodeError> {
+        fn decode<D: bincode::de::Decoder<Context = C>>(
+            decoder: &mut D,
+        ) -> Result<Self, bincode::error::DecodeError> {
             Ok(Self {
                 start: f32::decode(decoder)?,
-                transforms: <Vec<AnimationTransform<f32>>>::decode(decoder)?
+                transforms: <Vec<AnimationTransform<f32>>>::decode(decoder)?,
             })
         }
     }
@@ -297,7 +308,10 @@ const _: () = {
     }
 
     impl bincode::Encode for AnimationTransform<f32> {
-        fn encode<E: bincode::enc::Encoder>(&self, encoder: &mut E) -> Result<(), bincode::error::EncodeError> {
+        fn encode<E: bincode::enc::Encoder>(
+            &self,
+            encoder: &mut E,
+        ) -> Result<(), bincode::error::EncodeError> {
             self.end.encode(encoder)?;
             self.duration.encode(encoder)?;
             self.first_step.encode(encoder)?;
@@ -306,7 +320,9 @@ const _: () = {
     }
 
     impl<C> bincode::Decode<C> for AnimationTransform<f32> {
-        fn decode<D: bincode::de::Decoder<Context = C>>(decoder: &mut D) -> Result<Self, bincode::error::DecodeError> {
+        fn decode<D: bincode::de::Decoder<Context = C>>(
+            decoder: &mut D,
+        ) -> Result<Self, bincode::error::DecodeError> {
             Ok(Self {
                 end: f32::decode(decoder)?,
                 duration: usize::decode(decoder)?,
@@ -325,17 +341,22 @@ const _: () = {
     }
 
     impl bincode::Encode for AnimationChannel<[u8; 4]> {
-        fn encode<E: bincode::enc::Encoder>(&self, encoder: &mut E) -> Result<(), bincode::error::EncodeError> {
+        fn encode<E: bincode::enc::Encoder>(
+            &self,
+            encoder: &mut E,
+        ) -> Result<(), bincode::error::EncodeError> {
             self.start.encode(encoder)?;
             self.transforms.encode(encoder)
         }
     }
 
     impl<C> bincode::Decode<C> for AnimationChannel<[u8; 4]> {
-        fn decode<D: bincode::de::Decoder<Context = C>>(decoder: &mut D) -> Result<Self, bincode::error::DecodeError> {
+        fn decode<D: bincode::de::Decoder<Context = C>>(
+            decoder: &mut D,
+        ) -> Result<Self, bincode::error::DecodeError> {
             Ok(Self {
                 start: <[u8; 4]>::decode(decoder)?,
-                transforms: <Vec<AnimationTransform<[u8; 4]>>>::decode(decoder)?
+                transforms: <Vec<AnimationTransform<[u8; 4]>>>::decode(decoder)?,
             })
         }
     }
@@ -349,7 +370,10 @@ const _: () = {
     }
 
     impl bincode::Encode for AnimationTransform<[u8; 4]> {
-        fn encode<E: bincode::enc::Encoder>(&self, encoder: &mut E) -> Result<(), bincode::error::EncodeError> {
+        fn encode<E: bincode::enc::Encoder>(
+            &self,
+            encoder: &mut E,
+        ) -> Result<(), bincode::error::EncodeError> {
             self.end.encode(encoder)?;
             self.duration.encode(encoder)?;
             self.first_step.encode(encoder)?;
@@ -358,7 +382,9 @@ const _: () = {
     }
 
     impl<C> bincode::Decode<C> for AnimationTransform<[u8; 4]> {
-        fn decode<D: bincode::de::Decoder<Context = C>>(decoder: &mut D) -> Result<Self, bincode::error::DecodeError> {
+        fn decode<D: bincode::de::Decoder<Context = C>>(
+            decoder: &mut D,
+        ) -> Result<Self, bincode::error::DecodeError> {
             Ok(Self {
                 end: <[u8; 4]>::decode(decoder)?,
                 duration: usize::decode(decoder)?,
@@ -377,17 +403,22 @@ const _: () = {
     }
 
     impl bincode::Encode for AnimationChannel<Vec2> {
-        fn encode<E: bincode::enc::Encoder>(&self, encoder: &mut E) -> Result<(), bincode::error::EncodeError> {
+        fn encode<E: bincode::enc::Encoder>(
+            &self,
+            encoder: &mut E,
+        ) -> Result<(), bincode::error::EncodeError> {
             <[f32; 2]>::from(self.start).encode(encoder)?;
             self.transforms.encode(encoder)
         }
     }
 
     impl<C> bincode::Decode<C> for AnimationChannel<Vec2> {
-        fn decode<D: bincode::de::Decoder<Context = C>>(decoder: &mut D) -> Result<Self, bincode::error::DecodeError> {
+        fn decode<D: bincode::de::Decoder<Context = C>>(
+            decoder: &mut D,
+        ) -> Result<Self, bincode::error::DecodeError> {
             Ok(Self {
                 start: <[f32; 2]>::decode(decoder)?.into(),
-                transforms: <Vec<AnimationTransform<Vec2>>>::decode(decoder)?
+                transforms: <Vec<AnimationTransform<Vec2>>>::decode(decoder)?,
             })
         }
     }
@@ -401,7 +432,10 @@ const _: () = {
     }
 
     impl bincode::Encode for AnimationTransform<Vec2> {
-        fn encode<E: bincode::enc::Encoder>(&self, encoder: &mut E) -> Result<(), bincode::error::EncodeError> {
+        fn encode<E: bincode::enc::Encoder>(
+            &self,
+            encoder: &mut E,
+        ) -> Result<(), bincode::error::EncodeError> {
             <[f32; 2]>::from(self.end).encode(encoder)?;
             self.duration.encode(encoder)?;
             self.first_step.encode(encoder)?;
@@ -418,12 +452,14 @@ const _: () = {
     }
 
     impl<C> bincode::Decode<C> for AnimationTransform<Vec2> {
-        fn decode<D: bincode::de::Decoder<Context = C>>(decoder: &mut D) -> Result<Self, bincode::error::DecodeError> {
+        fn decode<D: bincode::de::Decoder<Context = C>>(
+            decoder: &mut D,
+        ) -> Result<Self, bincode::error::DecodeError> {
             Ok(Self {
                 end: <[f32; 2]>::decode(decoder)?.into(),
                 duration: usize::decode(decoder)?,
                 first_step: TransformStep::decode(decoder)?,
-                additional_steps: <Vec<TransformStep>>::decode(decoder)?
+                additional_steps: <Vec<TransformStep>>::decode(decoder)?,
             })
         }
     }

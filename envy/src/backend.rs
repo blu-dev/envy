@@ -119,7 +119,7 @@ pub trait EnvyBackend: Sized + EnvyMaybeSendSync + 'static {
         &self,
         uniform: Self::UniformHandle,
         args: DrawTextureArgs<Self>,
-        pass: &mut Self::RenderPass<'_>
+        pass: &mut Self::RenderPass<'_>,
     );
 
     /// Draws a glyph with the provided handle and uniform to the screen

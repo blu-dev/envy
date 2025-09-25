@@ -57,6 +57,7 @@ impl DrawUniform {
 }
 
 unsafe impl Pod for DrawUniform {}
+
 unsafe impl Zeroable for DrawUniform {
     fn zeroed() -> Self {
         Self {

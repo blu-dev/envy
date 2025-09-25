@@ -27,6 +27,16 @@ use lyon::{
         GeometryBuilderError, VertexId,
     },
 };
+
+#[cfg(all(feature = "wgpu_25", feature = "wgpu_26"))]
+compile_error!("Only select one version of wgpu");
+
+#[cfg(all(feature = "wgpu_25", not(feature = "wgpu_26")))]
+use wgpu_25 as wgpu;
+
+#[cfg(all(feature = "wgpu_26", not(feature = "wgpu_25")))]
+use wgpu_26 as wgpu;
+
 use wgpu::{util::DeviceExt, RenderPass};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]

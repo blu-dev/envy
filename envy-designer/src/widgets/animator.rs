@@ -2,7 +2,7 @@ use std::{sync::Arc, time::Instant};
 
 use camino::{Utf8Path, Utf8PathBuf};
 use egui_ltreeview::Action;
-use envy::{Animation, AnimationChannel, LayoutRoot, LayoutTree, NodeAnimation, NodeTemplate};
+use envy::{Animation, AnimationChannel, LayoutRoot, LayoutTree, NodeAnimation, NodeImplTemplate, NodeTemplate};
 use envy_wgpu::WgpuBackend;
 use parking_lot::Mutex;
 
@@ -87,7 +87,7 @@ impl AnimatorWidget {
                             self.animation.clear();
                         }
 
-                        for (template, _) in root.templates() {
+                        for (template, _) in root.iter_templates() {
                             if template.is_empty() {
                                 continue;
                             }
@@ -296,6 +296,8 @@ impl AnimatorWidget {
                 scale_channel: None,
                 size_channel: None,
                 color_channel: None,
+                uv_offset_channel: None,
+                uv_scale_channel: None,
             });
             animation.node_animations.last_mut().unwrap()
         };
@@ -384,6 +386,38 @@ impl AnimatorWidget {
                             });
                         } else {
                             node_animation.color_channel = None;
+                        }
+                    }
+
+                    if let NodeImplTemplate::Image(default_image) = &default_node.implementation {
+                        let mut has_uv_offset_channel = node_animation.uv_offset_channel.is_some();
+                        if ui
+                            .checkbox(&mut has_uv_offset_channel, "Animate UV Offset Channel?")
+                            .changed()
+                        {
+                            if has_uv_offset_channel {
+                                node_animation.uv_offset_channel = Some(AnimationChannel {
+                                    start: default_image.uv_offset,
+                                    transforms: vec![],
+                                });
+                            } else {
+                                node_animation.uv_offset_channel = None;
+                            }
+                        }
+
+                        let mut has_uv_scale_channel = node_animation.uv_scale_channel.is_some();
+                        if ui
+                            .checkbox(&mut has_uv_scale_channel, "Animate UV Scale Channel?")
+                            .changed()
+                        {
+                            if has_uv_scale_channel {
+                                node_animation.uv_scale_channel = Some(AnimationChannel {
+                                    start: default_image.uv_scale,
+                                    transforms: vec![],
+                                });
+                            } else {
+                                node_animation.uv_scale_channel = None;
+                            }
                         }
                     }
                 });
@@ -559,6 +593,82 @@ impl AnimatorWidget {
                                 channel.get_next_keyframe_idx(self.current_keyframe);
                         }
                     });
+                }
+
+                if matches!(&default_node.implementation, NodeImplTemplate::Image(_)) {
+                    if let Some(channel) = node_animation.uv_offset_channel.as_mut() {
+                        ui.horizontal(|ui| {
+                            ui.label("UV Offset");
+
+                            let keyframe = channel.keyframe_mut(self.current_keyframe);
+                            let mut has_keyframe = keyframe.is_some();
+                            if ui.checkbox(&mut has_keyframe, "").changed() {
+                                if has_keyframe {
+                                    channel.insert_keyframe(self.current_keyframe);
+                                } else {
+                                    channel.remove_keyframe(self.current_keyframe);
+                                }
+                            }
+
+                            if let Some(value) = channel.keyframe_mut(self.current_keyframe) {
+                                egui::Grid::new("uv-offset-grid").show(ui, |ui| {
+                                    ui.add(egui::DragValue::new(&mut value.x));
+                                    ui.add(egui::DragValue::new(&mut value.y));
+                                });
+                            } else {
+                                let mut value = channel.value_for_frame(self.current_keyframe);
+                                egui::Grid::new("uv-offset-grid").show(ui, |ui| {
+                                    ui.add_enabled(false, egui::DragValue::new(&mut value.x));
+                                    ui.add_enabled(false, egui::DragValue::new(&mut value.y));
+                                });
+                            }
+
+                            if ui.button("<").clicked() {
+                                self.current_keyframe =
+                                    channel.get_prev_keyframe_idx(self.current_keyframe);
+                            } else if ui.button(">").clicked() {
+                                self.current_keyframe =
+                                    channel.get_next_keyframe_idx(self.current_keyframe);
+                            }
+                        });
+                    }
+
+                    if let Some(channel) = node_animation.uv_scale_channel.as_mut() {
+                        ui.horizontal(|ui| {
+                            ui.label("UV Scale");
+
+                            let keyframe = channel.keyframe_mut(self.current_keyframe);
+                            let mut has_keyframe = keyframe.is_some();
+                            if ui.checkbox(&mut has_keyframe, "").changed() {
+                                if has_keyframe {
+                                    channel.insert_keyframe(self.current_keyframe);
+                                } else {
+                                    channel.remove_keyframe(self.current_keyframe);
+                                }
+                            }
+
+                            if let Some(value) = channel.keyframe_mut(self.current_keyframe) {
+                                egui::Grid::new("uv-scale-grid").show(ui, |ui| {
+                                    ui.add(egui::DragValue::new(&mut value.x));
+                                    ui.add(egui::DragValue::new(&mut value.y));
+                                });
+                            } else {
+                                let mut value = channel.value_for_frame(self.current_keyframe);
+                                egui::Grid::new("uv-scale-grid").show(ui, |ui| {
+                                    ui.add_enabled(false, egui::DragValue::new(&mut value.x));
+                                    ui.add_enabled(false, egui::DragValue::new(&mut value.y));
+                                });
+                            }
+
+                            if ui.button("<").clicked() {
+                                self.current_keyframe =
+                                    channel.get_prev_keyframe_idx(self.current_keyframe);
+                            } else if ui.button(">").clicked() {
+                                self.current_keyframe =
+                                    channel.get_next_keyframe_idx(self.current_keyframe);
+                            }
+                        });
+                    }
                 }
             });
         });

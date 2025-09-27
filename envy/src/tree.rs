@@ -4,11 +4,7 @@ use camino::Utf8Path;
 use glam::{Affine2, Vec2};
 
 use crate::{
-    animations::Animation,
-    backend,
-    node::{Anchor, NodeParent, ObservedNode, PropagationArgs},
-    template::{LayoutTemplate, NodeImplTemplate, NodeTemplate},
-    EnvyBackend, NodeItem, NodeTransform, SublayoutNode,
+    EnvyBackend, NodeItem, NodeTransform, SublayoutNode, animations::Animation, node::{Anchor, NodeParent, ObservedNode, PropagationArgs}, template::{LayoutTemplate, NodeImplTemplate, NodeTemplate, NodeVisibility}
 };
 
 pub struct LayoutRoot<B: EnvyBackend> {
@@ -194,7 +190,11 @@ impl<B: EnvyBackend> LayoutRoot<B> {
         self.templates.get_mut(name.as_ref())
     }
 
-    pub fn templates(&self) -> impl IntoIterator<Item = (&str, &LayoutTemplate)> {
+    pub fn templates(&self) -> &HashMap<String, LayoutTemplate> {
+        &self.templates
+    }
+
+    pub fn iter_templates(&self) -> impl IntoIterator<Item = (&str, &LayoutTemplate)> {
         self.templates
             .iter()
             .map(|(name, template)| (name.as_str(), template))
@@ -441,7 +441,9 @@ impl<B: EnvyBackend> LayoutTree<B> {
                     };
 
                     let mut color = node.color();
-                    should_keep |= !node_anim.animate(*progress, node.transform_mut(), &mut color);
+                    let mut transform = *node.transform();
+                    should_keep |= !node_anim.animate(*progress, &mut transform, &mut color, node.implementation_mut());
+                    *node.transform_mut() = transform;
                     *node.color_mut() = color;
                 }
 
@@ -468,8 +470,11 @@ impl<B: EnvyBackend> LayoutTree<B> {
                     continue;
                 };
 
+
                 let mut color = node.color();
-                node_anim.animate(keyframe as f32, node.transform_mut(), &mut color);
+                let mut transform = *node.transform();
+                node_anim.animate(keyframe as f32, &mut transform, &mut color, node.implementation_mut());
+                *node.transform_mut() = transform;
                 *node.color_mut() = color;
             }
         }
@@ -479,6 +484,7 @@ impl<B: EnvyBackend> LayoutTree<B> {
         &mut self,
         transform: &NodeTransform,
         affine: &Affine2,
+        computed_visibility: NodeVisibility,
         changed: bool,
     ) {
         let this_scale = transform.scale * transform.size / self.canvas_size.as_vec2();
@@ -499,6 +505,7 @@ impl<B: EnvyBackend> LayoutTree<B> {
                 transform,
                 affine: &affine,
                 changed,
+                computed_vis: computed_visibility
             })
         });
     }
@@ -519,6 +526,7 @@ impl<B: EnvyBackend> LayoutTree<B> {
                 transform: &transform,
                 affine: &AFFINE,
                 changed: false,
+                computed_vis: NodeVisibility::Visible,
             });
         });
     }

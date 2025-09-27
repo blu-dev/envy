@@ -1,12 +1,15 @@
 use glam::Affine2;
 
 use crate::{
-    node::{affine2_to_mat4, PreparationArgs},
-    DrawTextureArgs, DrawUniform, EnvyBackend, Node,
+    DrawTextureArgs, DrawUniform, EnvyBackend, ImageScalingMode, Node, backend::TextureRequestArgs, node::{PreparationArgs, affine2_to_mat4}
 };
 
 pub struct ImageNode<B: EnvyBackend> {
     name: String,
+    scaling_x: ImageScalingMode,
+    scaling_y: ImageScalingMode,
+    uv_offset: glam::Vec2,
+    uv_scale: glam::Vec2,
     mask_texture_name: Option<String>,
     uniform: Option<B::UniformHandle>,
     texture: Option<B::TextureHandle>,
@@ -17,6 +20,10 @@ impl<B: EnvyBackend> ImageNode<B> {
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
+            scaling_x: ImageScalingMode::default(),
+            scaling_y: ImageScalingMode::default(),
+            uv_offset: glam::Vec2::ZERO,
+            uv_scale: glam::Vec2::ONE,
             mask_texture_name: None,
             uniform: None,
             texture: None,
@@ -40,6 +47,38 @@ impl<B: EnvyBackend> ImageNode<B> {
     pub fn set_mask_texture_name(&mut self, name: impl Into<Option<String>>) {
         self.mask_texture_name = name.into();
         self.invalidate_mask_handle();
+    }
+
+    pub fn scaling_x(&self) -> ImageScalingMode {
+        self.scaling_x
+    }
+
+    pub fn set_scaling_x(&mut self, mode: ImageScalingMode) {
+        self.scaling_x = mode;
+    }
+
+    pub fn scaling_y(&self) -> ImageScalingMode {
+        self.scaling_x
+    }
+
+    pub fn set_scaling_y(&mut self, mode: ImageScalingMode) {
+        self.scaling_y = mode;
+    }
+
+    pub fn uv_offset(&self) -> glam::Vec2 {
+        self.uv_offset
+    }
+
+    pub fn set_uv_offset(&mut self, offset: glam::Vec2) {
+        self.uv_offset = offset;
+    }
+
+    pub fn uv_scale(&self) -> glam::Vec2 {
+        self.uv_scale
+    }
+
+    pub fn set_uv_scale(&mut self, scale: glam::Vec2) {
+        self.uv_scale = scale;
     }
 
     pub fn invalidate_image_handle(&mut self) {
@@ -68,11 +107,17 @@ impl<B: EnvyBackend> Node<B> for ImageNode<B> {
         }
 
         if self.texture.is_none() {
-            self.texture = backend.request_texture_by_name(&self.name);
+            self.texture = backend.request_texture_by_name(&self.name, TextureRequestArgs {
+                scaling_x: self.scaling_x,
+                scaling_y: self.scaling_y
+            });
         }
 
         if let Some(name) = self.mask_texture_name.as_ref() {
-            self.mask_texture = backend.request_texture_by_name(name);
+            self.mask_texture = backend.request_texture_by_name(name, TextureRequestArgs {
+                scaling_x: self.scaling_x,
+                scaling_y: self.scaling_y
+            });
         }
 
         if self.uniform.is_none() {
@@ -111,7 +156,10 @@ impl<B: EnvyBackend> Node<B> for ImageNode<B> {
 
     fn prepare(&mut self, args: PreparationArgs<'_>, backend: &mut B) {
         if self.texture.is_none() {
-            self.texture = backend.request_texture_by_name(&self.name);
+            self.texture = backend.request_texture_by_name(&self.name, TextureRequestArgs {
+                scaling_x: self.scaling_x,
+                scaling_y: self.scaling_y
+            });
 
             if self.texture.is_none() {
                 log::warn!(
@@ -129,8 +177,14 @@ impl<B: EnvyBackend> Node<B> for ImageNode<B> {
             return;
         };
 
+        let Some(texture) = self.texture else {
+            log::error!("ImageNode::prepare called without texture being set (image '{}')", self.name);
+            return;
+        };
+
         let matrix = affine2_to_mat4(*args.affine * Affine2::from_scale(args.transform.size));
         backend.update_uniform(uniform, DrawUniform::new(matrix, args.color));
+        backend.update_texture_scaling(texture, self.uv_offset, self.uv_scale, args.transform.size);
     }
 
     fn render(&self, backend: &B, pass: &mut <B as EnvyBackend>::RenderPass<'_>) {

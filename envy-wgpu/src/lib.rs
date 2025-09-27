@@ -1,8 +1,5 @@
 use std::{
-    borrow::Cow,
-    num::NonZeroU64,
-    ops::{Index, IndexMut, Range},
-    sync::Arc,
+    borrow::Cow, cmp::Ordering, num::NonZeroU64, ops::{Index, IndexMut, Range}, sync::Arc
 };
 
 use bitvec::vec::BitVec;
@@ -13,8 +10,7 @@ use cosmic_text::{
     CacheKey, Command, Family, FontSystem, Metrics, SwashCache,
 };
 use envy::{
-    asset::EnvyAssetProvider, DrawTextureArgs, DrawUniform, EnvyBackend, PreparedGlyph,
-    TextLayoutArgs, ViewUniform,
+    DrawTextureArgs, DrawUniform, EnvyBackend, ImageScalingMode, PreparedGlyph, TextLayoutArgs, TextureRequestArgs, ViewUniform, asset::EnvyAssetProvider
 };
 use glam::{Vec3, Vec4};
 use image::{codecs::png::PngEncoder, ImageEncoder};
@@ -64,12 +60,39 @@ impl TextureVertex {
     const TOP_RIGHT:    Self = Self { pos: glam::Vec3::new( 0.5, -0.5, 0.0), tex: glam::Vec2::X };
     const BOTTOM_LEFT:  Self = Self { pos: glam::Vec3::new(-0.5,  0.5, 0.0), tex: glam::Vec2::Y };
     const BOTTOM_RIGHT: Self = Self { pos: glam::Vec3::new( 0.5,  0.5, 0.0), tex: glam::Vec2::ONE };
+
+    fn top_left_tiling(texture_size: glam::Vec2, node_size: glam::Vec2) -> Self {
+        Self::TOP_LEFT
+    }
+
+    fn top_right_tiling(texture_size: glam::Vec2, node_size: glam::Vec2) -> Self {
+        Self {
+            pos: Self::TOP_RIGHT.pos,
+            tex: glam::Vec2::new(node_size.x / texture_size.x, 0.0),
+        }
+    }
+
+    fn bottom_left_tiling(texture_size: glam::Vec2, node_size: glam::Vec2) -> Self {
+        Self {
+            pos: Self::BOTTOM_LEFT.pos,
+            tex: glam::Vec2::new(0.0, node_size.y / texture_size.y),
+        }
+    }
+
+    fn bottom_right_tiling(texture_size: glam::Vec2, node_size: glam::Vec2) -> Self {
+        Self {
+            pos: Self::BOTTOM_RIGHT.pos,
+            tex: glam::Vec2::new(node_size.x / texture_size.x, node_size.y / texture_size.y),
+        }
+    }
 }
 
 struct ReservedTexture {
     texture: wgpu::Texture,
     sampler: wgpu::Sampler,
     bind_group: wgpu::BindGroup,
+    scaling_mode_x: wgpu::AddressMode,
+    scaling_mode_y: wgpu::AddressMode,
 }
 
 struct TextureBackend {
@@ -80,12 +103,12 @@ struct TextureBackend {
     texture_bgl: wgpu::BindGroupLayout,
     default_mask_texture: wgpu::BindGroup,
     pipeline: wgpu::RenderPipeline,
-    vertex_buffer: wgpu::Buffer,
+    vertex_buffer: BufferVec<TextureVertex>,
 }
 
 impl TextureBackend {
     #[rustfmt::skip]
-    const TEXTURE_VERTICES: &[TextureVertex] = &[
+    const STRETCH_VERTICES: &[TextureVertex; 6] = &[
         TextureVertex::TOP_LEFT, TextureVertex::BOTTOM_LEFT, TextureVertex::TOP_RIGHT,
         TextureVertex::TOP_RIGHT, TextureVertex::BOTTOM_LEFT, TextureVertex::BOTTOM_RIGHT
     ];
@@ -257,11 +280,7 @@ impl TextureBackend {
             cache: None,
         });
 
-        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("envy_texture_vertex_buffer"),
-            contents: bytemuck::cast_slice(Self::TEXTURE_VERTICES),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
+        let mut vertex_buffer = BufferVec::new(wgpu::BufferUsages::VERTEX);
 
         let mut cpu_image_cache = IndexMap::new();
         let mut buffer = std::io::Cursor::new(vec![]);
@@ -382,16 +401,16 @@ impl<T: Pod + Zeroable> BufferVec<T> {
     }
 }
 
-impl<T: Pod + Zeroable> Index<usize> for BufferVec<T> {
-    type Output = T;
+impl<T: Pod + Zeroable, I> Index<I> for BufferVec<T> where Vec<T>: Index<I> {
+    type Output = <Vec<T> as Index<I>>::Output;
 
-    fn index(&self, index: usize) -> &Self::Output {
+    fn index(&self, index: I) -> &Self::Output {
         &self.cpu[index]
     }
 }
 
-impl<T: Pod + Zeroable> IndexMut<usize> for BufferVec<T> {
-    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+impl<T: Pod + Zeroable, I> IndexMut<I> for BufferVec<T> where Vec<T>: IndexMut<I> {
+    fn index_mut(&mut self, index: I) -> &mut Self::Output {
         self.dirty = true;
         &mut self.cpu[index]
     }
@@ -972,6 +991,7 @@ impl WgpuBackend {
                     }],
                 }));
         }
+        self.textures.vertex_buffer.flush(&self.device, &self.queue);
         self.fonts.vertices.flush(&self.device, &self.queue);
         self.fonts.indices.flush(&self.device, &self.queue);
     }
@@ -1156,11 +1176,21 @@ impl EnvyBackend for WgpuBackend {
 
     type RenderPass<'a> = wgpu::RenderPass<'a>;
 
-    fn request_texture_by_name(&mut self, name: impl AsRef<str>) -> Option<Self::TextureHandle> {
+    fn request_texture_by_name(&mut self, name: impl AsRef<str>, args: TextureRequestArgs) -> Option<Self::TextureHandle> {
         let texture = self.textures.image_cache.get(name.as_ref())?.clone();
+        let scaling_mode_x = match args.scaling_x {
+            ImageScalingMode::Stretch => wgpu::AddressMode::ClampToEdge,
+            ImageScalingMode::Tiling => wgpu::AddressMode::Repeat,
+        };
+        let scaling_mode_y = match args.scaling_y {
+            ImageScalingMode::Stretch => wgpu::AddressMode::ClampToEdge,
+            ImageScalingMode::Tiling => wgpu::AddressMode::Repeat,
+        };
         let sampler = self.device.create_sampler(&wgpu::SamplerDescriptor {
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
+            address_mode_u: scaling_mode_x,
+            address_mode_v: scaling_mode_y,
             ..Default::default()
         });
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1180,22 +1210,27 @@ impl EnvyBackend for WgpuBackend {
             ],
         });
 
-        let texture = ReservedTexture {
-            texture,
-            sampler: self.device.create_sampler(&Default::default()),
-            bind_group,
-        };
+        let texture = ReservedTexture { texture, sampler, bind_group, scaling_mode_x, scaling_mode_y };
 
-        if let Some(first_available) = self.textures.texture_slots.first_zero() {
+        let handle = if let Some(first_available) = self.textures.texture_slots.first_zero() {
             self.textures.texture_slots.set(first_available, true);
             self.textures.textures[first_available] = texture;
-            Some(WgpuTextureHandle(first_available))
+            WgpuTextureHandle(first_available)
         } else {
             let handle = WgpuTextureHandle(self.textures.textures.len());
             self.textures.texture_slots.push(true);
             self.textures.textures.push(texture);
-            Some(handle)
+            handle
+        };
+
+        let vertex_start = handle.0 * 6;
+        match self.textures.vertex_buffer.len().cmp(&vertex_start) {
+            Ordering::Greater => {},
+            Ordering::Equal => self.textures.vertex_buffer.extend(TextureBackend::STRETCH_VERTICES.iter().copied()),
+            Ordering::Less => panic!("Texture handle set too high!")
         }
+
+        Some(handle)
     }
 
     fn request_font_by_name(&mut self, name: impl AsRef<str>) -> Option<Self::FontHandle> {
@@ -1220,6 +1255,44 @@ impl EnvyBackend for WgpuBackend {
 
     fn update_uniform(&mut self, uniform: Self::UniformHandle, data: crate::DrawUniform) {
         self.uniforms[uniform.0] = data;
+    }
+
+    fn update_texture_scaling(&mut self, handle: Self::TextureHandle, uv_offset: glam::Vec2, uv_scale: glam::Vec2, size: glam::Vec2) {
+        let texture = &self.textures.textures[handle.0];
+        let texture_size = texture.texture.size();
+        let texture_size = glam::Vec2::new(texture_size.width as f32, texture_size.height as f32);
+
+        let mut vertices = *TextureBackend::STRETCH_VERTICES;
+
+        match texture.scaling_mode_x {
+            wgpu::AddressMode::ClampToBorder | wgpu::AddressMode::ClampToEdge => {},
+            wgpu::AddressMode::Repeat | wgpu::AddressMode::MirrorRepeat => {
+                vertices.iter_mut().for_each(|vertex| {
+                    vertex.tex.x *= size.x / texture_size.x
+                });
+
+            },
+        }
+
+        match texture.scaling_mode_y {
+            wgpu::AddressMode::ClampToBorder | wgpu::AddressMode::ClampToEdge => {},
+            wgpu::AddressMode::Repeat | wgpu::AddressMode::MirrorRepeat => {
+                vertices.iter_mut().for_each(|vertex| {
+                    vertex.tex.y *= size.y / texture_size.y
+                });
+            },
+        }
+
+        let uv_scale = glam::Vec2::new(
+            if uv_scale.x == 0.0 { 0.0 } else { uv_scale.x.recip() },
+            if uv_scale.y == 0.0 { 0.0 } else { uv_scale.y.recip() }
+        );
+
+        vertices.iter_mut().for_each(|vert| {
+            vert.tex = vert.tex * uv_scale + uv_offset / texture_size;
+        });
+
+        self.textures.vertex_buffer[handle.0 * 6..(handle.0 + 1) * 6].copy_from_slice(&vertices);
     }
 
     fn layout_text(&mut self, args: TextLayoutArgs<'_, Self>) -> Vec<PreparedGlyph<Self>> {
@@ -1276,8 +1349,8 @@ impl EnvyBackend for WgpuBackend {
                 .unwrap_or(&self.textures.default_mask_texture),
             &[],
         );
-        pass.set_vertex_buffer(0, self.textures.vertex_buffer.slice(..));
-        pass.draw(0..6, 0..1);
+        pass.set_vertex_buffer(0, self.textures.vertex_buffer.buffer().unwrap().slice(..));
+        pass.draw(args.texture.0 as u32 * 6..(args.texture.0 + 1) as u32 * 6, 0..1);
     }
 
     fn draw_glyph(

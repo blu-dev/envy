@@ -1,6 +1,6 @@
 use glam::Affine2;
 
-use crate::{EnvyBackend, LayoutTree, Node, NodeTransform};
+use crate::{EnvyBackend, LayoutTree, Node, NodeTransform, template::NodeVisibility};
 
 pub struct SublayoutNode<B: EnvyBackend> {
     reference: String,
@@ -35,10 +35,11 @@ impl<B: EnvyBackend> SublayoutNode<B> {
         &mut self,
         transform: &NodeTransform,
         affine: &Affine2,
+        computed_vis: NodeVisibility,
         changed: bool,
     ) {
         self.tree
-            .propagate_with_root_transform(transform, affine, changed);
+            .propagate_with_root_transform(transform, affine, computed_vis, changed);
     }
 }
 

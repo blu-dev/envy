@@ -96,7 +96,7 @@ impl egui_dock::TabViewer for AppTabViewer<'_> {
         ui.style_mut().visuals.button_frame = false;
         let root = self.root.lock();
         let templates = root
-            .templates()
+            .iter_templates()
             .into_iter()
             .map(|(template, _)| template.to_string())
             .collect::<Vec<_>>();
@@ -227,7 +227,7 @@ impl Application {
         root.setup(&mut backend);
 
         let templates = root
-            .templates()
+            .iter_templates()
             .into_iter()
             .map(|(name, _)| name)
             .filter(|name| !name.is_empty())
@@ -439,7 +439,7 @@ impl eframe::App for Application {
                         let mut root = self.root.lock();
                         let mut backend = self.backend.lock();
                         let templates = root
-                            .templates()
+                            .iter_templates()
                             .into_iter()
                             .filter(|(name, _)| !name.is_empty())
                             .map(|(name, _)| name.to_string())
@@ -503,7 +503,7 @@ impl eframe::App for Application {
                         let mut root = self.root.lock();
                         let mut backend = self.backend.lock();
                         let templates = root
-                            .templates()
+                            .iter_templates()
                             .into_iter()
                             .filter(|(name, _)| !name.is_empty())
                             .map(|(name, _)| name.to_string())

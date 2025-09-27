@@ -1,4 +1,9 @@
-use crate::{DrawUniform, EnvyMaybeSendSync};
+use crate::{DrawUniform, EnvyMaybeSendSync, ImageScalingMode};
+
+pub struct TextureRequestArgs {
+    pub scaling_x: ImageScalingMode,
+    pub scaling_y: ImageScalingMode,
+}
 
 /// Arguments passed to an [`EnvyBackend`] implementor to layout text
 pub struct TextLayoutArgs<'a, R: EnvyBackend> {
@@ -68,7 +73,7 @@ pub trait EnvyBackend: Sized + EnvyMaybeSendSync + 'static {
     type RenderPass<'a>;
 
     /// Requests a handle for the texture with the given `name`
-    fn request_texture_by_name(&mut self, name: impl AsRef<str>) -> Option<Self::TextureHandle>;
+    fn request_texture_by_name(&mut self, name: impl AsRef<str>, args: TextureRequestArgs) -> Option<Self::TextureHandle>;
 
     /// Requests a handle for the font with the given `name`
     fn request_font_by_name(&mut self, name: impl AsRef<str>) -> Option<Self::FontHandle>;
@@ -99,6 +104,11 @@ pub trait EnvyBackend: Sized + EnvyMaybeSendSync + 'static {
     /// IMPLEMENTOR NOTE: This method is called in a separate stage of the UI Tree than the render step, so you can wait to
     /// flush the changes to the GPU until you are sure that it is safe to do so.
     fn update_uniform(&mut self, handle: Self::UniformHandle, uniform: DrawUniform);
+
+    /// Informs the backend of the computed size of the texture, so that texture coords can be updated
+    ///
+    /// This is only useful if the [`ImageScalingMode`] is set to something other than [`ImageScalingMode::Stretch`]
+    fn update_texture_scaling(&mut self, handle: Self::TextureHandle, uv_offset: glam::Vec2, uv_scale: glam::Vec2, size: glam::Vec2);
 
     /// Requests the backend to render the provided text
     ///

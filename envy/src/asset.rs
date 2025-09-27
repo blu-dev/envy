@@ -24,12 +24,12 @@ impl Version {
     }
 
     const fn current() -> Self {
-        Self::new(0, 3, 1)
+        Self::new(0, 3, 3)
     }
 }
 
 mod v010 {
-    use crate::{ImageNodeTemplate, TextNodeTemplate};
+    use crate::{ImageNodeTemplate, TextNodeTemplate, template::NodeVisibility};
 
     use super::*;
     #[derive(Decode, Encode)]
@@ -260,6 +260,8 @@ mod v010 {
                 size_channel: None,
                 scale_channel: None,
                 color_channel: None,
+                uv_offset_channel: None,
+                uv_scale_channel: None,
             }
         }
     }
@@ -302,8 +304,8 @@ mod v010 {
         animations: HashMap<String, Animation>,
     }
 
-    pub(super) fn deserialize<B: EnvyBackend + EnvyAssetProvider>(
-        backend: &mut B,
+    pub(super) fn deserialize<B: EnvyBackend, A: EnvyAssetProvider>(
+        asset_provider: &mut A,
         reader: &mut std::io::Cursor<&[u8]>,
     ) -> crate::LayoutRoot<B> {
         let mut asset: Asset =
@@ -311,11 +313,11 @@ mod v010 {
 
         let mut root_template = LayoutTemplate::default();
 
-        fn produce_children_and_deserialize<B: EnvyBackend + EnvyAssetProvider>(
+        fn produce_children_and_deserialize<A: EnvyAssetProvider>(
             node: Node,
             images: &mut Vec<(String, Vec<u8>)>,
             fonts: &mut Vec<(String, Vec<u8>)>,
-            backend: &mut B,
+            asset_provider: &mut A,
         ) -> NodeTemplate {
             let Node {
                 name,
@@ -333,17 +335,21 @@ mod v010 {
                         .position(|(name, _)| name.eq(&image.resource_name))
                     {
                         let (name, data) = images.remove(pos);
-                        backend.load_image_bytes_with_name(name, data);
+                        asset_provider.load_image_bytes_with_name(name, data);
                     }
                     NodeImplTemplate::Image(ImageNodeTemplate {
                         texture_name: image.resource_name,
                         mask_texture_name: None,
+                        image_scaling_mode_x: Default::default(),
+                        image_scaling_mode_y: Default::default(),
+                        uv_offset: glam::Vec2::ZERO,
+                        uv_scale: glam::Vec2::ONE,
                     })
                 }
                 NodeImplementationV010::Text(text) => {
                     if let Some(pos) = fonts.iter().position(|(name, _)| name.eq(&text.font_name)) {
                         let (name, data) = fonts.remove(pos);
-                        backend.load_font_bytes_with_name(name, data);
+                        asset_provider.load_font_bytes_with_name(name, data);
                     }
                     NodeImplTemplate::Text(TextNodeTemplate {
                         font_name: text.font_name,
@@ -359,9 +365,10 @@ mod v010 {
                 transform: transform.into(),
                 color,
                 implementation,
+                visibility: NodeVisibility::Inherited,
                 children: children
                     .into_iter()
-                    .map(|child| produce_children_and_deserialize(child, images, fonts, backend))
+                    .map(|child| produce_children_and_deserialize(child, images, fonts, asset_provider))
                     .collect(),
             }
         }
@@ -371,7 +378,7 @@ mod v010 {
                 root,
                 &mut asset.images,
                 &mut asset.fonts,
-                backend,
+                asset_provider,
             ));
         }
 
@@ -415,8 +422,8 @@ mod v020 {
         root_template: LayoutTemplate,
     }
 
-    pub(super) fn deserialize<B: EnvyBackend + EnvyAssetProvider>(
-        backend: &mut B,
+    pub(super) fn deserialize<B: EnvyBackend, A: EnvyAssetProvider>(
+        asset_provider: &mut A,
         reader: &mut Cursor<&[u8]>,
     ) -> crate::LayoutRoot<B> {
         let asset: Asset =
@@ -432,11 +439,11 @@ mod v020 {
         let root = crate::LayoutRoot::from_root_template(root_template, templates);
 
         for (image, bytes) in asset.images {
-            backend.load_image_bytes_with_name(image, bytes);
+            asset_provider.load_image_bytes_with_name(image, bytes);
         }
 
         for (font, bytes) in asset.fonts {
-            backend.load_font_bytes_with_name(font, bytes);
+            asset_provider.load_font_bytes_with_name(font, bytes);
         }
 
         root
@@ -465,6 +472,8 @@ mod v021 {
                 size_channel: value.size_channel,
                 scale_channel: value.scale_channel,
                 color_channel: None,
+                uv_offset_channel: None,
+                uv_scale_channel: None,
             }
         }
     }
@@ -514,8 +523,8 @@ mod v021 {
         root_template: LayoutTemplate,
     }
 
-    pub(super) fn deserialize<B: EnvyBackend + EnvyAssetProvider>(
-        backend: &mut B,
+    pub(super) fn deserialize<B: EnvyBackend, A: EnvyAssetProvider>(
+        backend: &mut A,
         reader: &mut Cursor<&[u8]>,
     ) -> crate::LayoutRoot<B> {
         let asset: Asset =
@@ -545,7 +554,7 @@ mod v021 {
 mod v030 {
     use std::io::Cursor;
 
-    use crate::{Animation, NodeTransform, SublayoutNodeTemplate, TextNodeTemplate};
+    use crate::{AnimationChannel, NodeTransform, SublayoutNodeTemplate, TextNodeTemplate, template::NodeVisibility};
 
     #[derive(bincode::Encode, bincode::Decode, Clone)]
     struct ImageNodeTemplate {
@@ -557,6 +566,10 @@ mod v030 {
             Self {
                 texture_name: value.texture_name,
                 mask_texture_name: None,
+                image_scaling_mode_x: Default::default(),
+                image_scaling_mode_y: Default::default(),
+                uv_offset: glam::Vec2::ZERO,
+                uv_scale: glam::Vec2::ONE
             }
         }
     }
@@ -596,6 +609,170 @@ mod v030 {
                 name: value.name,
                 transform: value.transform,
                 color: value.color,
+                visibility: NodeVisibility::Inherited,
+                children: value.children.into_iter().map(Into::into).collect(),
+                implementation: value.implementation.into(),
+            }
+        }
+    }
+
+    #[derive(bincode::Encode, bincode::Decode)]
+    struct NodeAnimation {
+        node_path: String,
+        angle_channel: Option<AnimationChannel<f32>>,
+        position_channel: Option<AnimationChannel<glam::Vec2>>,
+        size_channel: Option<AnimationChannel<glam::Vec2>>,
+        scale_channel: Option<AnimationChannel<glam::Vec2>>,
+        color_channel: Option<AnimationChannel<[u8; 4]>>,
+    }
+
+    impl From<NodeAnimation> for crate::animations::NodeAnimation {
+        fn from(value: NodeAnimation) -> Self {
+            Self {
+                node_path: value.node_path,
+                angle_channel: value.angle_channel,
+                position_channel: value.position_channel,
+                size_channel: value.size_channel,
+                scale_channel: value.scale_channel,
+                color_channel: value.color_channel,
+                uv_offset_channel: None,
+                uv_scale_channel: None,
+            }
+        }
+    }
+
+    #[derive(bincode::Encode, bincode::Decode)]
+    struct Animation {
+        node_animations: Vec<NodeAnimation>,
+        total_duration: usize,
+    }
+
+    impl From<Animation> for crate::animations::Animation {
+        fn from(value: Animation) -> Self {
+            Self {
+                node_animations: value.node_animations.into_iter().map(Into::into).collect(),
+                total_duration: value.total_duration,
+            }
+        }
+    }
+
+    #[derive(bincode::Encode, bincode::Decode)]
+    struct LayoutTemplate {
+        canvas_size: [u32; 2],
+        root_nodes: Vec<NodeTemplate>,
+        animations: Vec<(String, Animation)>,
+    }
+
+    impl From<LayoutTemplate> for crate::LayoutTemplate {
+        fn from(value: LayoutTemplate) -> Self {
+            Self {
+                canvas_size: value.canvas_size,
+                root_nodes: value.root_nodes.into_iter().map(Into::into).collect(),
+                animations: value
+                    .animations
+                    .into_iter()
+                    .map(|(name, anim)| (name, anim.into()))
+                    .collect(),
+            }
+        }
+    }
+
+    #[derive(bincode::Decode, bincode::Encode)]
+    struct Asset {
+        images: Vec<(String, Vec<u8>)>,
+        fonts: Vec<(String, Vec<u8>)>,
+        templates: Vec<(String, LayoutTemplate)>,
+        root_template: LayoutTemplate,
+    }
+
+    pub(super) fn deserialize<B: crate::EnvyBackend, A: super::EnvyAssetProvider>(
+        backend: &mut A,
+        reader: &mut Cursor<&[u8]>,
+    ) -> crate::LayoutRoot<B> {
+        let asset: Asset =
+            bincode::decode_from_std_read(reader, bincode::config::standard()).unwrap();
+
+        let root_template = crate::LayoutTemplate::from(asset.root_template);
+
+        let templates = asset
+            .templates
+            .into_iter()
+            .map(|(name, template)| (name, crate::LayoutTemplate::from(template)));
+
+        let root = crate::LayoutRoot::from_root_template(root_template, templates);
+
+        for (image, bytes) in asset.images {
+            backend.load_image_bytes_with_name(image, bytes);
+        }
+
+        for (font, bytes) in asset.fonts {
+            backend.load_font_bytes_with_name(font, bytes);
+        }
+
+        root
+    }
+}
+
+mod v031 {
+    use std::io::Cursor;
+
+    use crate::{Animation, NodeTransform, SublayoutNodeTemplate, TextNodeTemplate, template::NodeVisibility};
+
+    #[derive(bincode::Encode, bincode::Decode, Clone)]
+    struct ImageNodeTemplate {
+        pub texture_name: String,
+        pub mask_texture_name: Option<String>,
+    }
+
+    impl From<ImageNodeTemplate> for crate::ImageNodeTemplate {
+        fn from(value: ImageNodeTemplate) -> Self {
+            Self {
+                texture_name: value.texture_name,
+                mask_texture_name: value.mask_texture_name,
+                image_scaling_mode_x: Default::default(),
+                image_scaling_mode_y: Default::default(),
+                uv_offset: glam::Vec2::ZERO,
+                uv_scale: glam::Vec2::ONE,
+            }
+        }
+    }
+
+    #[derive(bincode::Encode, bincode::Decode, Clone)]
+    enum NodeImplTemplate {
+        Empty,
+        Image(ImageNodeTemplate),
+        Text(TextNodeTemplate),
+        Sublayout(SublayoutNodeTemplate),
+    }
+
+    impl From<NodeImplTemplate> for crate::NodeImplTemplate {
+        fn from(value: NodeImplTemplate) -> Self {
+            use NodeImplTemplate as N;
+            match value {
+                N::Empty => Self::Empty,
+                N::Image(image) => Self::Image(image.into()),
+                N::Text(text) => Self::Text(text),
+                N::Sublayout(sublayout) => Self::Sublayout(sublayout),
+            }
+        }
+    }
+
+    #[derive(Clone, bincode::Encode, bincode::Decode)]
+    struct NodeTemplate {
+        name: String,
+        transform: NodeTransform,
+        color: [u8; 4],
+        children: Vec<NodeTemplate>,
+        implementation: NodeImplTemplate,
+    }
+
+    impl From<NodeTemplate> for crate::NodeTemplate {
+        fn from(value: NodeTemplate) -> Self {
+            Self {
+                name: value.name,
+                transform: value.transform,
+                color: value.color,
+                visibility: NodeVisibility::Inherited,
                 children: value.children.into_iter().map(Into::into).collect(),
                 implementation: value.implementation.into(),
             }
@@ -631,8 +808,133 @@ mod v030 {
         root_template: LayoutTemplate,
     }
 
-    pub(super) fn deserialize<B: crate::EnvyBackend + super::EnvyAssetProvider>(
-        backend: &mut B,
+    pub(super) fn deserialize<B: crate::EnvyBackend, A: super::EnvyAssetProvider>(
+        backend: &mut A,
+        reader: &mut Cursor<&[u8]>,
+    ) -> crate::LayoutRoot<B> {
+        let asset: Asset =
+            bincode::decode_from_std_read(reader, bincode::config::standard()).unwrap();
+
+        let root_template = crate::LayoutTemplate::from(asset.root_template);
+
+        let templates = asset
+            .templates
+            .into_iter()
+            .map(|(name, template)| (name, crate::LayoutTemplate::from(template)));
+
+        let root = crate::LayoutRoot::from_root_template(root_template, templates);
+
+        for (image, bytes) in asset.images {
+            backend.load_image_bytes_with_name(image, bytes);
+        }
+
+        for (font, bytes) in asset.fonts {
+            backend.load_font_bytes_with_name(font, bytes);
+        }
+
+        root
+    }
+}
+
+mod v032 {
+    use std::io::Cursor;
+
+    use crate::{Animation, ImageScalingMode, NodeTransform, SublayoutNodeTemplate, TextNodeTemplate, template::NodeVisibility};
+
+    #[derive(bincode::Encode, bincode::Decode, Clone)]
+    struct ImageNodeTemplate {
+        pub texture_name: String,
+        pub mask_texture_name: Option<String>,
+        pub image_scaling_mode_x: ImageScalingMode,
+        pub image_scaling_mode_y: ImageScalingMode,
+    }
+
+    impl From<ImageNodeTemplate> for crate::ImageNodeTemplate {
+        fn from(value: ImageNodeTemplate) -> Self {
+            Self {
+                texture_name: value.texture_name,
+                mask_texture_name: value.mask_texture_name,
+                image_scaling_mode_x: value.image_scaling_mode_x,
+                image_scaling_mode_y: value.image_scaling_mode_y,
+                uv_offset: glam::Vec2::ZERO,
+                uv_scale: glam::Vec2::ONE,
+            }
+        }
+    }
+
+    #[derive(bincode::Encode, bincode::Decode, Clone)]
+    enum NodeImplTemplate {
+        Empty,
+        Image(ImageNodeTemplate),
+        Text(TextNodeTemplate),
+        Sublayout(SublayoutNodeTemplate),
+    }
+
+    impl From<NodeImplTemplate> for crate::NodeImplTemplate {
+        fn from(value: NodeImplTemplate) -> Self {
+            use NodeImplTemplate as N;
+            match value {
+                N::Empty => Self::Empty,
+                N::Image(image) => Self::Image(image.into()),
+                N::Text(text) => Self::Text(text),
+                N::Sublayout(sublayout) => Self::Sublayout(sublayout),
+            }
+        }
+    }
+
+    #[derive(Clone, bincode::Encode, bincode::Decode)]
+    struct NodeTemplate {
+        name: String,
+        transform: NodeTransform,
+        color: [u8; 4],
+        children: Vec<NodeTemplate>,
+        implementation: NodeImplTemplate,
+    }
+
+    impl From<NodeTemplate> for crate::NodeTemplate {
+        fn from(value: NodeTemplate) -> Self {
+            Self {
+                name: value.name,
+                transform: value.transform,
+                color: value.color,
+                visibility: NodeVisibility::Inherited,
+                children: value.children.into_iter().map(Into::into).collect(),
+                implementation: value.implementation.into(),
+            }
+        }
+    }
+
+    #[derive(bincode::Encode, bincode::Decode)]
+    struct LayoutTemplate {
+        canvas_size: [u32; 2],
+        root_nodes: Vec<NodeTemplate>,
+        animations: Vec<(String, Animation)>,
+    }
+
+    impl From<LayoutTemplate> for crate::LayoutTemplate {
+        fn from(value: LayoutTemplate) -> Self {
+            Self {
+                canvas_size: value.canvas_size,
+                root_nodes: value.root_nodes.into_iter().map(Into::into).collect(),
+                animations: value
+                    .animations
+                    .into_iter()
+                    .map(|(name, anim)| (name, anim.into()))
+                    .collect(),
+            }
+        }
+    }
+
+    #[derive(bincode::Decode, bincode::Encode)]
+    struct Asset {
+        images: Vec<(String, Vec<u8>)>,
+        fonts: Vec<(String, Vec<u8>)>,
+        templates: Vec<(String, LayoutTemplate)>,
+        root_template: LayoutTemplate,
+    }
+
+    pub(super) fn deserialize<B: crate::EnvyBackend, A: super::EnvyAssetProvider>(
+        backend: &mut A,
         reader: &mut Cursor<&[u8]>,
     ) -> crate::LayoutRoot<B> {
         let asset: Asset =
@@ -690,7 +992,7 @@ pub fn serialize<B: EnvyBackend + EnvyAssetProvider>(
     };
 
     asset.templates = root
-        .templates()
+        .iter_templates()
         .into_iter()
         .map(|(name, template)| (name.to_string(), template.clone()))
         .collect::<Vec<_>>();
@@ -745,8 +1047,8 @@ pub fn serialize<B: EnvyBackend + EnvyAssetProvider>(
     output.into_inner()
 }
 
-pub fn deserialize<B: EnvyBackend + EnvyAssetProvider>(
-    backend: &mut B,
+pub fn deserialize<B: EnvyBackend, A: EnvyAssetProvider>(
+    asset_provider: &mut A,
     bytes: &[u8],
 ) -> crate::LayoutRoot<B> {
     let mut reader = std::io::Cursor::new(bytes);
@@ -754,13 +1056,17 @@ pub fn deserialize<B: EnvyBackend + EnvyAssetProvider>(
         bincode::decode_from_std_read(&mut reader, bincode::config::standard()).unwrap();
 
     if version == Version::new(0, 1, 0) {
-        return v010::deserialize(backend, &mut reader);
+        return v010::deserialize(asset_provider, &mut reader);
     } else if version == Version::new(0, 2, 0) {
-        return v020::deserialize(backend, &mut reader);
+        return v020::deserialize(asset_provider, &mut reader);
     } else if version == Version::new(0, 2, 1) {
-        return v021::deserialize(backend, &mut reader);
+        return v021::deserialize(asset_provider, &mut reader);
     } else if version == Version::new(0, 3, 0) {
-        return v030::deserialize(backend, &mut reader);
+        return v030::deserialize(asset_provider, &mut reader);
+    } else if version == Version::new(0, 3, 1) {
+        return v031::deserialize(asset_provider, &mut reader);
+    } else if version == Version::new(0, 3, 2) {
+        return v032::deserialize(asset_provider, &mut reader);
     }
 
     assert_eq!(version, Version::current());
@@ -771,11 +1077,11 @@ pub fn deserialize<B: EnvyBackend + EnvyAssetProvider>(
     let root = crate::LayoutRoot::from_root_template(asset.root_template, asset.templates);
 
     for (image, bytes) in asset.images {
-        backend.load_image_bytes_with_name(image, bytes);
+        asset_provider.load_image_bytes_with_name(image, bytes);
     }
 
     for (font, bytes) in asset.fonts {
-        backend.load_font_bytes_with_name(font, bytes);
+        asset_provider.load_font_bytes_with_name(font, bytes);
     }
 
     root

@@ -1,6 +1,5 @@
 use crate::{
-    template::{NodeImplTemplate, NodeTemplate},
-    EnvyBackend, EnvyMaybeSendSync, LayoutRoot, LayoutTemplate, LayoutTree,
+    EnvyBackend, EnvyMaybeSendSync, LayoutRoot, LayoutTemplate, LayoutTree, template::{NodeImplTemplate, NodeTemplate, NodeVisibility}
 };
 use glam::{Affine2, Mat4, Vec2, Vec4};
 use serde::{Deserialize, Serialize};
@@ -251,6 +250,7 @@ pub(crate) struct PropagationArgs<'a> {
     pub(crate) transform: &'a NodeTransform,
     pub(crate) affine: &'a Affine2,
     pub(crate) changed: bool,
+    pub(crate) computed_vis: NodeVisibility,
 }
 
 pub(crate) struct ObservedNode<B: EnvyBackend> {
@@ -522,6 +522,8 @@ pub struct NodeItem<B: EnvyBackend> {
     children: Vec<ObservedNode<B>>,
     transform: NodeTransform,
     color: [u8; 4],
+    visibility: NodeVisibility,
+    computed_vis: NodeVisibility,
     affine: Affine2,
     was_changed: bool,
     node: Box<dyn Node<B>>,
@@ -546,6 +548,8 @@ impl<B: EnvyBackend> NodeItem<B> {
                 .collect::<Vec<_>>(),
             transform: template.transform,
             color: template.color,
+            visibility: template.visibility,
+            computed_vis: template.visibility,
             affine: Affine2::IDENTITY,
             was_changed: true,
             node: match &template.implementation {
@@ -553,6 +557,10 @@ impl<B: EnvyBackend> NodeItem<B> {
                 NodeImplTemplate::Image(image) => {
                     let mut node = ImageNode::new(&image.texture_name);
                     node.set_mask_texture_name(image.mask_texture_name.clone());
+                    node.set_scaling_x(image.image_scaling_mode_x);
+                    node.set_scaling_y(image.image_scaling_mode_y);
+                    node.set_uv_offset(image.uv_offset);
+                    node.set_uv_scale(image.uv_scale);
                     Box::new(node)
                 }
                 NodeImplTemplate::Text(text) => Box::new(TextNode::new(
@@ -574,34 +582,7 @@ impl<B: EnvyBackend> NodeItem<B> {
     }
 
     pub fn from_template(template: &NodeTemplate, root: &LayoutRoot<B>) -> Self {
-        Self {
-            name: template.name.clone(),
-            children: template
-                .children
-                .iter()
-                .map(|child| ObservedNode::new(NodeItem::from_template(child, root)))
-                .collect::<Vec<_>>(),
-            transform: template.transform,
-            color: template.color,
-            affine: Affine2::IDENTITY,
-            was_changed: true,
-            node: match &template.implementation {
-                NodeImplTemplate::Empty => Box::new(EmptyNode),
-                NodeImplTemplate::Image(image) => Box::new(ImageNode::new(&image.texture_name)),
-                NodeImplTemplate::Text(text) => Box::new(TextNode::new(
-                    &text.font_name,
-                    text.font_size,
-                    text.line_height,
-                    &text.text,
-                )),
-                NodeImplTemplate::Sublayout(sublayout) => Box::new(SublayoutNode::new(
-                    &sublayout.sublayout_name,
-                    root.instantiate_tree_from_template(&sublayout.sublayout_name)
-                        .unwrap(),
-                )),
-            },
-            update: vec![],
-        }
+        Self::from_template_with_root_templates(template, root.templates())
     }
 
     pub fn new_boxed(
@@ -615,6 +596,8 @@ impl<B: EnvyBackend> NodeItem<B> {
             children: vec![],
             transform,
             color,
+            visibility: NodeVisibility::Inherited,
+            computed_vis: NodeVisibility::Inherited,
             affine: Affine2::IDENTITY,
             was_changed: true,
             node,
@@ -663,6 +646,14 @@ impl<B: EnvyBackend> NodeItem<B> {
 
     pub fn add_on_update(&mut self, callback: impl NodeUpdateCallback<B>) {
         self.update.push(Box::new(callback));
+    }
+
+    pub fn implementation(&self) -> &dyn Node<B> {
+        &*self.node
+    }
+
+    pub fn implementation_mut(&mut self) -> &mut dyn Node<B> {
+        &mut *self.node
     }
 
     pub fn set_implementation(&mut self, node: impl Node<B>) {
@@ -874,8 +865,14 @@ impl<B: EnvyBackend> NodeItem<B> {
                 );
         }
 
+        self.computed_vis = match self.computed_vis {
+            NodeVisibility::Hidden => NodeVisibility::Hidden,
+            NodeVisibility::Inherited => parent.computed_vis,
+            NodeVisibility::Visible => NodeVisibility::Visible
+        };
+
         if let Some(sublayout) = self.node.as_any_mut().downcast_mut::<SublayoutNode<B>>() {
-            sublayout.propagate_with_root_transform(&self.transform, &self.affine, did_change);
+            sublayout.propagate_with_root_transform(&self.transform, &self.affine, self.computed_vis, did_change);
         }
 
         self.children.iter_mut().for_each(|child| {
@@ -883,6 +880,7 @@ impl<B: EnvyBackend> NodeItem<B> {
                 affine: &self.affine,
                 transform: &self.transform,
                 changed: did_change,
+                computed_vis: self.computed_vis,
             });
         });
     }
@@ -905,7 +903,9 @@ impl<B: EnvyBackend> NodeItem<B> {
     }
 
     pub(crate) fn render(&self, backend: &B, render_pass: &mut B::RenderPass<'_>) {
-        self.node.render(backend, render_pass);
+        if matches!(self.computed_vis, NodeVisibility::Visible) {
+            self.node.render(backend, render_pass);
+        }
         self.children
             .iter()
             .for_each(|child| child.node.render(backend, render_pass))

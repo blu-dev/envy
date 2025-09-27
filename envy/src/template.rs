@@ -3,11 +3,60 @@ use camino::Utf8Path;
 use crate::{Animation, NodeTransform};
 
 #[cfg_attr(feature = "asset", derive(bincode::Encode, bincode::Decode))]
+#[derive(Copy, Clone, Default, Debug)]
+pub enum ImageScalingMode {
+    #[default]
+    Stretch,
+    Tiling
+}
+
 #[derive(Clone)]
 pub struct ImageNodeTemplate {
     pub texture_name: String,
     pub mask_texture_name: Option<String>,
+    pub image_scaling_mode_x: ImageScalingMode,
+    pub image_scaling_mode_y: ImageScalingMode,
+    pub uv_offset: glam::Vec2,
+    pub uv_scale: glam::Vec2,
 }
+
+#[cfg(feature = "asset")]
+const _: () = {
+    use bincode::{BorrowDecode, Decode, Encode};
+
+    impl Encode for ImageNodeTemplate {
+        fn encode<E: bincode::enc::Encoder>(&self, encoder: &mut E) -> Result<(), bincode::error::EncodeError> {
+            self.texture_name.encode(encoder)?;
+            self.mask_texture_name.encode(encoder)?;
+            self.image_scaling_mode_x.encode(encoder)?;
+            self.image_scaling_mode_y.encode(encoder)?;
+            self.uv_offset.to_array().encode(encoder)?;
+            self.uv_scale.to_array().encode(encoder)
+        }
+    }
+
+    impl<'de, C> BorrowDecode<'de, C> for ImageNodeTemplate {
+        fn borrow_decode<D: bincode::de::BorrowDecoder<'de, Context = C>>(
+            decoder: &mut D,
+        ) -> Result<Self, bincode::error::DecodeError> {
+            Decode::decode(decoder)
+        }
+    }
+
+    impl<C> Decode<C> for ImageNodeTemplate {
+        fn decode<D: bincode::de::Decoder<Context = C>>(decoder: &mut D) -> Result<Self, bincode::error::DecodeError> {
+            Ok(Self {
+                texture_name: Decode::decode(decoder)?,
+                mask_texture_name: Decode::decode(decoder)?,
+                image_scaling_mode_x: Decode::decode(decoder)?,
+                image_scaling_mode_y: Decode::decode(decoder)?,
+                uv_offset: <[f32; 2]>::decode(decoder)?.into(),
+                uv_scale: <[f32; 2]>::decode(decoder)?.into(),
+            })
+        }
+    }
+};
+
 
 #[cfg_attr(feature = "asset", derive(bincode::Encode, bincode::Decode))]
 #[derive(Clone)]
@@ -34,11 +83,21 @@ pub enum NodeImplTemplate {
 }
 
 #[cfg_attr(feature = "asset", derive(bincode::Encode, bincode::Decode))]
+#[derive(Debug, Copy, Clone, Default)]
+pub enum NodeVisibility {
+    Hidden,
+    #[default]
+    Inherited,
+    Visible,
+}
+
+#[cfg_attr(feature = "asset", derive(bincode::Encode, bincode::Decode))]
 #[derive(Clone)]
 pub struct NodeTemplate {
     pub name: String,
     pub transform: NodeTransform,
     pub color: [u8; 4],
+    pub visibility: NodeVisibility,
     pub children: Vec<NodeTemplate>,
     pub implementation: NodeImplTemplate,
 }

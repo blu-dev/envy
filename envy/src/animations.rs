@@ -1,6 +1,6 @@
 use std::cmp::Ordering;
 
-use crate::NodeTransform;
+use crate::{EnvyBackend, ImageNode, Node, NodeTransform};
 
 #[cfg_attr(feature = "asset", derive(bincode::Encode, bincode::Decode))]
 #[derive(Copy, Clone, PartialEq, Eq)]
@@ -474,10 +474,14 @@ pub struct NodeAnimation {
     pub size_channel: Option<AnimationChannel<glam::Vec2>>,
     pub scale_channel: Option<AnimationChannel<glam::Vec2>>,
     pub color_channel: Option<AnimationChannel<[u8; 4]>>,
+
+    // Texture node specific animations
+    pub uv_offset_channel: Option<AnimationChannel<glam::Vec2>>,
+    pub uv_scale_channel: Option<AnimationChannel<glam::Vec2>>,
 }
 
 impl NodeAnimation {
-    pub fn animate(&self, timer: f32, node: &mut NodeTransform, color: &mut [u8; 4]) -> bool {
+    pub fn animate<B: EnvyBackend>(&self, timer: f32, node: &mut NodeTransform, color: &mut [u8; 4], node_impl: &mut dyn Node<B>) -> bool {
         let mut is_done = true;
 
         if let Some(angle) = self.angle_channel.as_ref() {
@@ -617,6 +621,64 @@ impl NodeAnimation {
                 is_done = false;
             } else {
                 *color = *channel.last_value();
+            }
+        }
+
+        if let Some(image) = node_impl.as_any_mut().downcast_mut::<ImageNode<B>>() {
+            if let Some(channel) = self.uv_offset_channel.as_ref() {
+                let mut transform_start = channel.start;
+                let mut frame_start = 0.0;
+                let transform = channel.transforms.iter().find(|transform| {
+                    if transform.duration as f32 + frame_start <= timer {
+                        frame_start += transform.duration as f32;
+                        transform_start = transform.end;
+                        false
+                    } else {
+                        true
+                    }
+                });
+
+                if let Some(transform) = transform {
+                    let mut progress = transform
+                        .first_step
+                        .transform((timer - frame_start) / transform.duration as f32);
+                    transform.additional_steps.iter().for_each(|transform| {
+                        progress = transform.transform(progress);
+                    });
+
+                    image.set_uv_offset(glam::Vec2::interpolate(transform_start, transform.end, progress));
+                    is_done = false;
+                } else {
+                    image.set_uv_offset(*channel.last_value());
+                }
+            }
+
+            if let Some(channel) = self.uv_scale_channel.as_ref() {
+                let mut transform_start = channel.start;
+                let mut frame_start = 0.0;
+                let transform = channel.transforms.iter().find(|transform| {
+                    if transform.duration as f32 + frame_start <= timer {
+                        frame_start += transform.duration as f32;
+                        transform_start = transform.end;
+                        false
+                    } else {
+                        true
+                    }
+                });
+
+                if let Some(transform) = transform {
+                    let mut progress = transform
+                        .first_step
+                        .transform((timer - frame_start) / transform.duration as f32);
+                    transform.additional_steps.iter().for_each(|transform| {
+                        progress = transform.transform(progress);
+                    });
+
+                    image.set_uv_scale(glam::Vec2::interpolate(transform_start, transform.end, progress));
+                    is_done = false;
+                } else {
+                    image.set_uv_scale(*channel.last_value());
+                }
             }
         }
 

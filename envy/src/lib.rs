@@ -9,13 +9,14 @@ mod tree;
 pub use animations::{
     Animation, AnimationChannel, AnimationTransform, NodeAnimation, TransformStep,
 };
-pub use backend::{DrawTextureArgs, EnvyBackend, PreparedGlyph, TextLayoutArgs};
+pub use backend::{DrawTextureArgs, EnvyBackend, PreparedGlyph, TextLayoutArgs, TextureRequestArgs};
 pub use node::{
     EmptyNode, ImageNode, Node, NodeDisjointAccessor, NodeItem, NodeTransform, SublayoutNode,
     TextNode,
 };
 pub use template::{
     ImageNodeTemplate, LayoutTemplate, MoveNodePosition, NodeImplTemplate, NodeTemplate,
+    ImageScalingMode, NodeVisibility,
     SublayoutNodeTemplate, TextNodeTemplate,
 };
 pub use tree::{LayoutRoot, LayoutTree};

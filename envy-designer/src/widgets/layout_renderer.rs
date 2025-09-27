@@ -5,8 +5,7 @@ use egui::epaint::ViewportInPixels;
 use egui_ltreeview::DirPosition;
 use egui_wgpu::CallbackTrait;
 use envy::{
-    ImageNodeTemplate, LayoutRoot, LayoutTemplate, LayoutTree, MoveNodePosition, NodeImplTemplate,
-    NodeTemplate, NodeTransform, SublayoutNodeTemplate, TextNodeTemplate,
+    ImageNodeTemplate, ImageScalingMode, LayoutRoot, LayoutTemplate, LayoutTree, MoveNodePosition, NodeImplTemplate, NodeTemplate, NodeTransform, NodeVisibility, SublayoutNodeTemplate, TextNodeTemplate
 };
 use envy_wgpu::WgpuBackend;
 use parking_lot::Mutex;
@@ -230,6 +229,7 @@ impl LayoutRenderer {
                     transform: NodeTransform::default(),
                     color: [255; 4],
                     children: vec![],
+                    visibility: NodeVisibility::default(),
                     implementation: NodeImplTemplate::Empty,
                 };
                 if node.as_str().is_empty() {
@@ -241,12 +241,15 @@ impl LayoutRenderer {
                 changed |= true;
             }
 
+            let mut editing = self.editing.clone();
             for node in remove_nodes {
                 template.remove_node(&node);
+                if editing.as_ref() == Some(&node) {
+                    editing = None;
+                }
                 changed |= true;
             }
 
-            let mut editing = self.editing.clone();
 
             for action in actions {
                 use egui_ltreeview::Action;
@@ -326,7 +329,7 @@ impl LayoutRenderer {
                 let template_names = {
                     self.root
                         .lock()
-                        .templates()
+                        .iter_templates()
                         .into_iter()
                         .filter(|(name, _)| !name.is_empty())
                         .map(|(name, _)| name.to_string())
@@ -388,6 +391,30 @@ impl LayoutRenderer {
                     node.transform.angle %= 360.0;
                     ui.end_row();
 
+                    ui.label("Visibility");
+                    egui::ComboBox::new("visibility", "")
+                        .selected_text(match node.visibility {
+                            NodeVisibility::Hidden => "Hidden",
+                            NodeVisibility::Inherited => "Inherited",
+                            NodeVisibility::Visible => "Visible"
+                        })
+                        .show_ui(ui, |ui| {
+                            if ui.selectable_label(matches!(node.visibility, NodeVisibility::Hidden), "Hidden").clicked() {
+                                changed = true;
+                                node.visibility = NodeVisibility::Hidden;
+                                ui.close();
+                            } else if ui.selectable_label(matches!(node.visibility, NodeVisibility::Inherited), "Inherited").clicked() {
+                                changed = true;
+                                node.visibility = NodeVisibility::Inherited;
+                                ui.close()
+                            } else if ui.selectable_label(matches!(node.visibility, NodeVisibility::Visible), "Visible").clicked() {
+                                changed = true;
+                                node.visibility = NodeVisibility::Visible;
+                                ui.close()
+                            }
+                        });
+                    ui.end_row();
+
                     ui.label("Color");
                     changed |= ui
                         .color_edit_button_srgba_unmultiplied(&mut node.color)
@@ -422,6 +449,10 @@ impl LayoutRenderer {
                                 node.implementation = NodeImplTemplate::Image(ImageNodeTemplate {
                                     texture_name: "".to_string(),
                                     mask_texture_name: None,
+                                    image_scaling_mode_x: Default::default(),
+                                    image_scaling_mode_y: Default::default(),
+                                    uv_offset: glam::Vec2::ZERO,
+                                    uv_scale: glam::Vec2::ONE,
                                 })
                             }
                             2 => {
@@ -500,6 +531,63 @@ impl LayoutRenderer {
                                     }
                                 });
                         });
+
+                        egui::Grid::new("texture-scaling")
+                            .show(ui, |ui| {
+                                ui.label("Texture Scale Mode X");
+                                egui::ComboBox::new("x", "")
+                                    .selected_text(match &image.image_scaling_mode_x {
+                                        ImageScalingMode::Stretch => "Stretch",
+                                        ImageScalingMode::Tiling => "Tiling"
+                                    })
+                                    .show_ui(ui, |ui| {
+                                        if ui.selectable_label(matches!(&image.image_scaling_mode_x, ImageScalingMode::Stretch), "Stretch").clicked() {
+                                            image.image_scaling_mode_x = ImageScalingMode::Stretch;
+                                            changed |= true;
+                                            ui.close();
+                                        } else if ui.selectable_label(matches!(&image.image_scaling_mode_x, ImageScalingMode::Tiling), "Tiling").clicked() {
+                                            image.image_scaling_mode_x = ImageScalingMode::Tiling;
+                                            changed |= true;
+                                            ui.close()
+                                        }
+                                    });
+                                ui.end_row();
+                                ui.label("Texture Scale Mode Y");
+                                egui::ComboBox::new("y", "")
+                                    .selected_text(match &image.image_scaling_mode_y {
+                                        ImageScalingMode::Stretch => "Stretch",
+                                        ImageScalingMode::Tiling => "Tiling"
+                                    })
+                                    .show_ui(ui, |ui| {
+                                        if ui.selectable_label(matches!(&image.image_scaling_mode_y, ImageScalingMode::Stretch), "Stretch").clicked() {
+                                            image.image_scaling_mode_y = ImageScalingMode::Stretch;
+                                            changed |= true;
+                                            ui.close();
+                                        } else if ui.selectable_label(matches!(&image.image_scaling_mode_y, ImageScalingMode::Tiling), "Tiling").clicked() {
+                                            image.image_scaling_mode_y = ImageScalingMode::Tiling;
+                                            changed |= true;
+                                            ui.close()
+                                        }
+                                    });
+                                ui.end_row();
+                            });
+
+                        egui::Grid::new("uvs")
+                            .show(ui, |ui| {
+                                ui.label("UV Offset (px)");
+                                egui::Grid::new("offset")
+                                    .show(ui, |ui| {
+                                        changed |= ui.add(egui::DragValue::new(&mut image.uv_offset.x).speed(1.0)).changed();
+                                        changed |= ui.add(egui::DragValue::new(&mut image.uv_offset.y).speed(1.0)).changed();
+                                    });
+                                ui.end_row();
+                                ui.label("UV Scale");
+                                egui::Grid::new("scale")
+                                    .show(ui, |ui| {
+                                        changed |= ui.add(egui::DragValue::new(&mut image.uv_scale.x).speed(0.1)).changed();
+                                        changed |= ui.add(egui::DragValue::new(&mut image.uv_scale.y).speed(0.1)).changed();
+                                    });
+                            });
                     }
                     NodeImplTemplate::Text(text) => {
                         ui.horizontal(|ui| {

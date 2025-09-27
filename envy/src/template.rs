@@ -65,6 +65,8 @@ pub struct TextNodeTemplate {
     pub text: String,
     pub font_size: f32,
     pub line_height: f32,
+    pub outline_thickness: f32,
+    pub outline_color: [u8; 4]
 }
 
 #[cfg_attr(feature = "asset", derive(bincode::Encode, bincode::Decode))]

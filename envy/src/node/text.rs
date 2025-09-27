@@ -15,6 +15,8 @@ pub struct TextNode<B: EnvyBackend> {
     font: Option<B::FontHandle>,
     glyphs: Vec<PreparedGlyph<B>>,
     needs_compute: bool,
+    outline_thickness: f32,
+    outline_color: [u8; 4],
 }
 
 impl<B: EnvyBackend> TextNode<B> {
@@ -32,6 +34,8 @@ impl<B: EnvyBackend> TextNode<B> {
             font: None,
             glyphs: vec![],
             needs_compute: true,
+            outline_thickness: 0.0,
+            outline_color: [255; 4]
         }
     }
 
@@ -74,9 +78,25 @@ impl<B: EnvyBackend> TextNode<B> {
         self.text = text.into();
     }
 
+    pub fn outline_thickness(&self) -> f32 {
+        self.outline_thickness
+    }
+
+    pub fn set_outline_thickness(&mut self, thickness: f32) {
+        self.outline_thickness = thickness;
+        self.needs_compute = true;
+    }
+
+    pub fn outline_color(&self) -> [u8; 4] {
+        self.outline_color
+    }
+
+    pub fn set_outline_color(&mut self, color: [u8; 4]) {
+        self.outline_color = color;
+    }
+
     pub fn invalidate_font_handle(&mut self) {
         self.font = None;
-        self.glyphs.clear();
         self.needs_compute = true;
     }
 }
@@ -149,6 +169,7 @@ impl<B: EnvyBackend> Node<B> for TextNode<B> {
                 line_height: self.line_height,
                 buffer_size: args.transform.size,
                 text: &self.text,
+                outline_thickness: self.outline_thickness,
             });
 
             self.needs_compute = false;
@@ -159,6 +180,10 @@ impl<B: EnvyBackend> Node<B> for TextNode<B> {
 
             let matrix = affine2_to_mat4(*args.affine * Affine2::from_translation(center));
             backend.update_uniform(glyph.uniform_handle, DrawUniform::new(matrix, args.color));
+
+            if let Some(handle) = glyph.outline_uniform_handle {
+                backend.update_uniform(handle, DrawUniform::new(matrix, glam::Vec4::from_array(self.outline_color.map(|c| c as f32 / 255.0))));
+            }
         }
     }
 
@@ -166,7 +191,7 @@ impl<B: EnvyBackend> Node<B> for TextNode<B> {
         backend.draw_glyphs(
             self.glyphs
                 .iter()
-                .map(|glyph| (glyph.uniform_handle, glyph.glyph_handle)),
+                .map(|glyph| (glyph.uniform_handle, glyph.outline_uniform_handle, glyph.glyph_handle)),
             pass,
         );
     }

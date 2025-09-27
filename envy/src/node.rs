@@ -563,12 +563,18 @@ impl<B: EnvyBackend> NodeItem<B> {
                     node.set_uv_scale(image.uv_scale);
                     Box::new(node)
                 }
-                NodeImplTemplate::Text(text) => Box::new(TextNode::new(
-                    &text.font_name,
-                    text.font_size,
-                    text.line_height,
-                    &text.text,
-                )),
+                NodeImplTemplate::Text(text) => {
+                    let mut node = TextNode::new(
+                        &text.font_name,
+                        text.font_size,
+                        text.line_height,
+                        &text.text,
+                    );
+
+                    node.set_outline_thickness(text.outline_thickness);
+                    node.set_outline_color(text.outline_color);
+                    Box::new(node)
+                },
                 NodeImplTemplate::Sublayout(sublayout) => Box::new(SublayoutNode::new(
                     &sublayout.sublayout_name,
                     LayoutTree::from_template_with_root_templates(

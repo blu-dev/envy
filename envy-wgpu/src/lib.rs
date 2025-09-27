@@ -19,8 +19,7 @@ use lyon::{
     math::point,
     path::FillRule,
     tessellation::{
-        FillGeometryBuilder, FillOptions, FillTessellator, FillVertex, GeometryBuilder,
-        GeometryBuilderError, VertexId,
+        FillGeometryBuilder, FillOptions, FillTessellator, FillVertex, GeometryBuilder, GeometryBuilderError, StrokeGeometryBuilder, StrokeOptions, StrokeTessellator, VertexId
     },
 };
 
@@ -416,11 +415,22 @@ impl<T: Pod + Zeroable, I> IndexMut<I> for BufferVec<T> where Vec<T>: IndexMut<I
     }
 }
 
+struct GlyphIndices {
+    fill: Range<u32>,
+    outline: Option<Range<u32>>
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+struct OutlineCacheKey {
+    inner: CacheKey,
+    outline: u32
+}
+
 struct WgpuFontBackend {
     constant_pipeline: wgpu::RenderPipeline,
     system: FontSystem,
     swash: SwashCache,
-    index_ranges: IndexMap<CacheKey, Range<u32>>,
+    glyphs: IndexMap<OutlineCacheKey, GlyphIndices>,
     vertices: BufferVec<Vec3>,
     indices: BufferVec<i32>,
     loaded_fonts: IndexMap<String, FaceInfo>,
@@ -499,7 +509,7 @@ impl WgpuFontBackend {
         Self {
             system,
             swash: SwashCache::new(),
-            index_ranges: IndexMap::new(),
+            glyphs: IndexMap::new(),
             vertices: BufferVec::new(wgpu::BufferUsages::VERTEX),
             indices: BufferVec::new(wgpu::BufferUsages::INDEX),
             loaded_fonts: IndexMap::new(),
@@ -508,7 +518,7 @@ impl WgpuFontBackend {
     }
 
     pub fn reset(&mut self) {
-        self.index_ranges.clear();
+        self.glyphs.clear();
         self.vertices.truncate(0);
         self.indices.truncate(0);
         self.loaded_fonts.clear();
@@ -528,14 +538,14 @@ impl WgpuFontBackend {
         face.clone()
     }
 
-    fn prepare_glyph(&mut self, key: CacheKey, width: f32, height: f32) -> WgpuGlyphHandle {
-        if let Some((idx, _, _)) = self.index_ranges.get_full(&key) {
+    fn prepare_glyph(&mut self, key: OutlineCacheKey, width: f32, height: f32, outline: f32) -> WgpuGlyphHandle {
+        if let Some((idx, _, _)) = self.glyphs.get_full(&key) {
             return WgpuGlyphHandle(idx);
         }
 
         let commands = self
             .swash
-            .get_outline_commands(&mut self.system, key)
+            .get_outline_commands(&mut self.system, key.inner)
             .unwrap();
 
         let mut builder = lyon::path::Path::builder().with_svg();
@@ -598,9 +608,31 @@ impl WgpuFontBackend {
             )
             .unwrap();
 
-        let index = self.index_ranges.len();
-        self.index_ranges
-            .insert(key, start..self.indices.len() as u32);
+        let index = self.glyphs.len();
+
+        let fill_indices = start..self.indices.len() as u32;
+
+        let outline_indices = if outline > 0.0 {
+            let start = self.indices.len() as u32;
+            let mut builder = InPlaceStrokeBufferBuilders {
+                vertex_start: self.vertices.len(),
+                index_start: self.indices.len(),
+                vertex_buffer: &mut self.vertices,
+                index_buffer: &mut self.indices,
+                thickness: outline
+            };
+            let mut stroke_tesselator = StrokeTessellator::new();
+            stroke_tesselator.tessellate_path(&path, &StrokeOptions::tolerance(0.02), &mut builder).unwrap();
+            Some(start..self.indices.len() as u32)
+        } else {
+            None
+        };
+        self.glyphs
+            .insert(key, GlyphIndices {
+                fill: fill_indices,
+                outline: outline_indices
+            });
+
         WgpuGlyphHandle(index)
     }
 
@@ -642,14 +674,17 @@ impl WgpuFontBackend {
         for run in buffer.layout_runs() {
             for glyph in run.glyphs.iter() {
                 glyphs.push((
-                    CacheKey::new(
-                        glyph.font_id,
-                        glyph.glyph_id,
-                        glyph.font_size,
-                        (0.0, 0.0),
-                        glyph.cache_key_flags,
-                    )
-                    .0,
+                    OutlineCacheKey {
+                        inner: CacheKey::new(
+                                glyph.font_id,
+                                glyph.glyph_id,
+                                glyph.font_size,
+                                (0.0, 0.0),
+                                glyph.cache_key_flags,
+                            )
+                            .0,
+                        outline: args.outline_thickness.to_bits()
+                    },
                     glyph.w,
                     run.line_height,
                     glyph.x + glyph.x_offset * glyph.font_size,
@@ -660,10 +695,11 @@ impl WgpuFontBackend {
 
         let mut prepared_glyphs = vec![];
         for (key, w, h, x, y) in glyphs {
-            let handle = self.prepare_glyph(key, w, h);
+            let handle = self.prepare_glyph(key, w, h, args.outline_thickness);
             prepared_glyphs.push(PreparedGlyph {
                 glyph_handle: handle,
                 uniform_handle: new_uniform(),
+                outline_uniform_handle: (args.outline_thickness > 0.0).then(|| new_uniform()),
                 offset_in_buffer: glam::Vec2::new(x, y),
                 size: glam::Vec2::new(w, h),
             });
@@ -684,7 +720,38 @@ struct InPlaceBufferBuilders<'a> {
     index_start: usize,
 }
 
+struct InPlaceStrokeBufferBuilders<'a> {
+    vertex_buffer: &'a mut BufferVec<Vec3>,
+    index_buffer: &'a mut BufferVec<i32>,
+    vertex_start: usize,
+    index_start: usize,
+    thickness: f32
+}
+
 impl GeometryBuilder for InPlaceBufferBuilders<'_> {
+    fn begin_geometry(&mut self) {
+        self.vertex_start = self.vertex_buffer.len();
+        self.index_start = self.index_buffer.len();
+    }
+    fn add_triangle(&mut self, a: VertexId, b: VertexId, c: VertexId) {
+        debug_assert!(a != b);
+        debug_assert!(a != c);
+        debug_assert!(b != c);
+        debug_assert!(a != VertexId::INVALID);
+        debug_assert!(b != VertexId::INVALID);
+        debug_assert!(c != VertexId::INVALID);
+
+        self.index_buffer
+            .extend([a, b, c].map(|vertex| u32::from(vertex) as i32));
+    }
+
+    fn abort_geometry(&mut self) {
+        self.vertex_buffer.truncate(self.vertex_start);
+        self.index_buffer.truncate(self.index_start);
+    }
+}
+
+impl GeometryBuilder for InPlaceStrokeBufferBuilders<'_> {
     fn begin_geometry(&mut self) {
         self.vertex_start = self.vertex_buffer.len();
         self.index_start = self.index_buffer.len();
@@ -719,6 +786,19 @@ impl FillGeometryBuilder for InPlaceBufferBuilders<'_> {
         Ok(VertexId(length as u32))
     }
 }
+
+impl StrokeGeometryBuilder for InPlaceStrokeBufferBuilders<'_> {
+    fn add_stroke_vertex(&mut self, vertex: lyon::tessellation::StrokeVertex) -> Result<VertexId, GeometryBuilderError> {
+        let length = self.vertex_buffer.len();
+        if length >= u32::MAX as usize {
+            return Err(GeometryBuilderError::TooManyVertices);
+        }
+        self.vertex_buffer.push(Vec3::from((vertex.position().to_3d() + vertex.normal().to_3d() * self.thickness).to_array()));
+
+        Ok(VertexId(length as u32))
+    }
+}
+
 pub struct WgpuBackend {
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -1356,16 +1436,16 @@ impl EnvyBackend for WgpuBackend {
     fn draw_glyph(
         &self,
         uniform: Self::UniformHandle,
+        outline_uniform: Option<Self::UniformHandle>,
         glyph: Self::GlyphHandle,
         pass: &mut Self::RenderPass<'_>,
     ) {
-        let index_range = self
+        let indices = self
             .fonts
-            .index_ranges
+            .glyphs
             .get_index(glyph.0)
             .unwrap()
-            .1
-            .clone();
+            .1;
         pass.set_pipeline(&self.fonts.constant_pipeline);
         pass.set_bind_group(
             1,
@@ -1377,16 +1457,14 @@ impl EnvyBackend for WgpuBackend {
             self.fonts.indices.buffer().unwrap().slice(..),
             wgpu::IndexFormat::Uint32,
         );
-        pass.draw_indexed(index_range, 0, 0..1);
-    }
-
-    fn draw_glyphs(
-        &self,
-        uniforms_and_glyphs: impl IntoIterator<Item = (Self::UniformHandle, Self::GlyphHandle)>,
-        pass: &mut Self::RenderPass<'_>,
-    ) {
-        for (uniform, glyph) in uniforms_and_glyphs {
-            self.draw_glyph(uniform, glyph, pass);
+        pass.draw_indexed(indices.fill.clone(), 0, 0..1);
+        if let Some(outline_uniform) = outline_uniform {
+            pass.set_bind_group(
+                1,
+                self.uniform_bind_group.as_ref().unwrap(),
+                &[(outline_uniform.0 * std::mem::size_of::<DrawUniform>()) as wgpu::DynamicOffset],
+            );
+            pass.draw_indexed(indices.outline.clone().unwrap(), 0, 0..1);
         }
     }
 

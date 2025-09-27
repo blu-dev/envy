@@ -461,6 +461,8 @@ impl LayoutRenderer {
                                     text: "".to_string(),
                                     font_size: 32.0,
                                     line_height: 32.0,
+                                    outline_thickness: 0.0,
+                                    outline_color: [255; 4]
                                 })
                             }
                             3 => {
@@ -627,6 +629,14 @@ impl LayoutRenderer {
                                         .clamp_existing_to_range(true),
                                 )
                                 .changed();
+                            ui.label("Outline Thickness");
+                            changed |= ui.add(egui::DragValue::new(&mut text.outline_thickness).range(0.0..=f32::INFINITY).speed(1.0).clamp_to_range(true)).changed();
+                            ui.end_row();
+                            ui.label("Outline Color");
+                            changed |= ui
+                                .color_edit_button_srgba_unmultiplied(&mut text.outline_color)
+                                .changed();
+                            ui.end_row();
                         });
 
                         ui.horizontal(|ui| {

@@ -21,6 +21,9 @@ pub struct TextLayoutArgs<'a, R: EnvyBackend> {
 
     /// Text to render, there is no support for rich text at this time
     pub text: &'a str,
+
+    /// Thickness of the outline
+    pub outline_thickness: f32,
 }
 
 /// Glyph information prepared by the render backend
@@ -30,6 +33,9 @@ pub struct PreparedGlyph<R: EnvyBackend> {
 
     /// The handle to the uniform buffer for the glyph
     pub uniform_handle: R::UniformHandle,
+
+    /// The handle to the outline uniform, should basically just be used for the color
+    pub outline_uniform_handle: Option<R::UniformHandle>,
 
     /// Offset of the glyph's origin point (top left) in the text buffer
     pub offset_in_buffer: glam::Vec2,
@@ -136,6 +142,7 @@ pub trait EnvyBackend: Sized + EnvyMaybeSendSync + 'static {
     fn draw_glyph(
         &self,
         uniform: Self::UniformHandle,
+        outline_uniform: Option<Self::UniformHandle>,
         handle: Self::GlyphHandle,
         pass: &mut Self::RenderPass<'_>,
     );
@@ -145,11 +152,11 @@ pub trait EnvyBackend: Sized + EnvyMaybeSendSync + 'static {
     /// The default implementation is ignorant of any optimizations that could be made by the backend
     fn draw_glyphs(
         &self,
-        uniforms_and_glyphs: impl IntoIterator<Item = (Self::UniformHandle, Self::GlyphHandle)>,
+        uniforms_and_glyphs: impl IntoIterator<Item = (Self::UniformHandle, Option<Self::UniformHandle>, Self::GlyphHandle)>,
         pass: &mut Self::RenderPass<'_>,
     ) {
-        for (uniform, glyph) in uniforms_and_glyphs {
-            self.draw_glyph(uniform, glyph, pass);
+        for (uniform, outline, glyph) in uniforms_and_glyphs {
+            self.draw_glyph(uniform, outline, glyph, pass);
         }
     }
 }

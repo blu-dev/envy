@@ -324,6 +324,15 @@ impl<'a, B: EnvyBackend> ObservedMut<'a, B> {
         unsafe { &mut (*self.node).color }
     }
 
+    pub fn visibility(&self) -> NodeVisibility {
+        self.deref().visibility
+    }
+
+    pub fn set_visibility(&mut self, vis: NodeVisibility) {
+        // SAFETY: We do not access `name`, so this is safe
+        unsafe { (*self.node).visibility = vis };
+    }
+
     pub fn mark_changed(&mut self) {
         // SAFETY: We do not access `name`, so this is safe
         unsafe {
@@ -453,7 +462,7 @@ impl<'a, B: EnvyBackend> NodeDisjointAccessor<'a, B> {
         let node = unsafe { &(*self.node_group)[self.idx].node.children };
 
         let name = name.as_ref();
-        for child in node.iter() {
+        for (idx, child) in node.iter().enumerate() {
             if child.node.name.eq(name) {
                 let accessor = NodeDisjointAccessor {
                     parent: NodeParent::Node(self),
@@ -462,7 +471,7 @@ impl<'a, B: EnvyBackend> NodeDisjointAccessor<'a, B> {
                     node_group: unsafe {
                         (*self.node_group)[self.idx].node.children.as_mut_slice()
                     },
-                    idx: self.idx,
+                    idx: idx,
                 };
 
                 return Some(accessor);
@@ -573,6 +582,7 @@ impl<B: EnvyBackend> NodeItem<B> {
 
                     node.set_outline_thickness(text.outline_thickness);
                     node.set_outline_color(text.outline_color);
+                    node.set_alignment(text.alignment);
                     Box::new(node)
                 },
                 NodeImplTemplate::Sublayout(sublayout) => Box::new(SublayoutNode::new(
@@ -618,6 +628,14 @@ impl<B: EnvyBackend> NodeItem<B> {
         node: impl Node<B>,
     ) -> Self {
         Self::new_boxed(name, transform, color, Box::new(node))
+    }
+
+    pub fn visibility(&self) -> NodeVisibility {
+        self.visibility
+    }
+
+    pub fn set_visibility(&mut self, vis: NodeVisibility) {
+        self.visibility = vis;
     }
 
     pub fn name(&self) -> &str {
@@ -871,7 +889,7 @@ impl<B: EnvyBackend> NodeItem<B> {
                 );
         }
 
-        self.computed_vis = match self.computed_vis {
+        self.computed_vis = match self.visibility {
             NodeVisibility::Hidden => NodeVisibility::Hidden,
             NodeVisibility::Inherited => parent.computed_vis,
             NodeVisibility::Visible => NodeVisibility::Visible
@@ -892,7 +910,7 @@ impl<B: EnvyBackend> NodeItem<B> {
     }
 
     pub(crate) fn prepare(&mut self, backend: &mut B) {
-        if self.was_changed {
+        if self.was_changed || self.is::<SublayoutNode<B>>() {
             self.was_changed = false;
             self.node.prepare(
                 PreparationArgs {

@@ -3,8 +3,7 @@ use std::any::Any;
 use glam::{Affine2, Vec2};
 
 use crate::{
-    node::{affine2_to_mat4, PreparationArgs},
-    DrawUniform, EnvyBackend, Node, PreparedGlyph, TextLayoutArgs,
+    DrawUniform, EnvyBackend, Node, PreparedGlyph, TextLayoutArgs, node::{PreparationArgs, affine2_to_mat4}, template::TextAlignment
 };
 
 pub struct TextNode<B: EnvyBackend> {
@@ -17,6 +16,7 @@ pub struct TextNode<B: EnvyBackend> {
     needs_compute: bool,
     outline_thickness: f32,
     outline_color: [u8; 4],
+    alignment: TextAlignment,
 }
 
 impl<B: EnvyBackend> TextNode<B> {
@@ -35,7 +35,8 @@ impl<B: EnvyBackend> TextNode<B> {
             glyphs: vec![],
             needs_compute: true,
             outline_thickness: 0.0,
-            outline_color: [255; 4]
+            outline_color: [255; 4],
+            alignment: TextAlignment::default(),
         }
     }
 
@@ -76,6 +77,7 @@ impl<B: EnvyBackend> TextNode<B> {
 
     pub fn set_text(&mut self, text: impl Into<String>) {
         self.text = text.into();
+        self.needs_compute = true;
     }
 
     pub fn outline_thickness(&self) -> f32 {
@@ -93,6 +95,15 @@ impl<B: EnvyBackend> TextNode<B> {
 
     pub fn set_outline_color(&mut self, color: [u8; 4]) {
         self.outline_color = color;
+    }
+
+    pub fn alignment(&self) -> TextAlignment {
+        self.alignment
+    }
+
+    pub fn set_alignment(&mut self, alignment: TextAlignment) {
+        self.alignment = alignment;
+        self.needs_compute = true;
     }
 
     pub fn invalidate_font_handle(&mut self) {
@@ -170,6 +181,7 @@ impl<B: EnvyBackend> Node<B> for TextNode<B> {
                 buffer_size: args.transform.size,
                 text: &self.text,
                 outline_thickness: self.outline_thickness,
+                alignment: self.alignment,
             });
 
             self.needs_compute = false;

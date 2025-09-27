@@ -5,7 +5,7 @@ use egui::epaint::ViewportInPixels;
 use egui_ltreeview::DirPosition;
 use egui_wgpu::CallbackTrait;
 use envy::{
-    ImageNodeTemplate, ImageScalingMode, LayoutRoot, LayoutTemplate, LayoutTree, MoveNodePosition, NodeImplTemplate, NodeTemplate, NodeTransform, NodeVisibility, SublayoutNodeTemplate, TextNodeTemplate
+    ImageNodeTemplate, ImageScalingMode, LayoutRoot, LayoutTemplate, LayoutTree, MoveNodePosition, NodeImplTemplate, NodeTemplate, NodeTransform, NodeVisibility, SublayoutNodeTemplate, TextAlignment, TextNodeTemplate
 };
 use envy_wgpu::WgpuBackend;
 use parking_lot::Mutex;
@@ -462,7 +462,8 @@ impl LayoutRenderer {
                                     font_size: 32.0,
                                     line_height: 32.0,
                                     outline_thickness: 0.0,
-                                    outline_color: [255; 4]
+                                    outline_color: [255; 4],
+                                    alignment: TextAlignment::default()
                                 })
                             }
                             3 => {
@@ -629,6 +630,40 @@ impl LayoutRenderer {
                                         .clamp_existing_to_range(true),
                                 )
                                 .changed();
+                            ui.end_row();
+                            ui.label("Alignment");
+                            egui::ComboBox::new("alignment", "")
+                                .selected_text(match text.alignment {
+                                    TextAlignment::Left => "Left",
+                                    TextAlignment::Center => "Center",
+                                    TextAlignment::Right => "Right",
+                                    TextAlignment::Justify => "Justify",
+                                    TextAlignment::End => "End",
+                                })
+                                .show_ui(ui, |ui| {
+                                    if ui.selectable_label(matches!(text.alignment, TextAlignment::Left), "Left").clicked() {
+                                        text.alignment = TextAlignment::Left;
+                                        changed = true;
+                                        ui.close();
+                                    } else if ui.selectable_label(matches!(text.alignment, TextAlignment::Center), "Center").clicked() {
+                                        text.alignment = TextAlignment::Center;
+                                        changed = true;
+                                        ui.close();
+                                    } else if ui.selectable_label(matches!(text.alignment, TextAlignment::Right), "Right").clicked() {
+                                        text.alignment = TextAlignment::Right;
+                                        changed = true;
+                                        ui.close();
+                                    } else if ui.selectable_label(matches!(text.alignment, TextAlignment::Justify), "Justify").clicked() {
+                                        text.alignment = TextAlignment::Justify;
+                                        changed = true;
+                                        ui.close();
+                                    } else if ui.selectable_label(matches!(text.alignment, TextAlignment::End), "End").clicked() {
+                                        text.alignment = TextAlignment::End;
+                                        changed = true;
+                                        ui.close();
+                                    }
+
+                                });
                             ui.label("Outline Thickness");
                             changed |= ui.add(egui::DragValue::new(&mut text.outline_thickness).range(0.0..=f32::INFINITY).speed(1.0).clamp_to_range(true)).changed();
                             ui.end_row();

@@ -57,6 +57,17 @@ const _: () = {
     }
 };
 
+#[cfg_attr(feature = "asset", derive(bincode::Encode, bincode::Decode))]
+#[derive(Debug, Copy, Clone, Default)]
+pub enum TextAlignment {
+    Left,
+    #[default]
+    Center,
+    Right,
+    Justify,
+    End
+}
+
 
 #[cfg_attr(feature = "asset", derive(bincode::Encode, bincode::Decode))]
 #[derive(Clone)]
@@ -66,7 +77,8 @@ pub struct TextNodeTemplate {
     pub font_size: f32,
     pub line_height: f32,
     pub outline_thickness: f32,
-    pub outline_color: [u8; 4]
+    pub outline_color: [u8; 4],
+    pub alignment: TextAlignment
 }
 
 #[cfg_attr(feature = "asset", derive(bincode::Encode, bincode::Decode))]

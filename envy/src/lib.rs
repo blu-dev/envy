@@ -11,12 +11,12 @@ pub use animations::{
 };
 pub use backend::{DrawTextureArgs, EnvyBackend, PreparedGlyph, TextLayoutArgs, TextureRequestArgs};
 pub use node::{
-    EmptyNode, ImageNode, Node, NodeDisjointAccessor, NodeItem, NodeTransform, SublayoutNode,
+    EmptyNode, ImageNode, Node, NodeDisjointAccessor, NodeUpdateCallback, NodeItem, NodeTransform, SublayoutNode,
     TextNode,
 };
 pub use template::{
     ImageNodeTemplate, LayoutTemplate, MoveNodePosition, NodeImplTemplate, NodeTemplate,
-    ImageScalingMode, NodeVisibility,
+    ImageScalingMode, NodeVisibility, TextAlignment,
     SublayoutNodeTemplate, TextNodeTemplate,
 };
 pub use tree::{LayoutRoot, LayoutTree};

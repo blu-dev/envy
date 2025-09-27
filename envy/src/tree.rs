@@ -329,10 +329,15 @@ impl<B: EnvyBackend> Default for LayoutRoot<B> {
     }
 }
 
+struct PlayingAnimation {
+    progress: f32,
+    looping: bool,
+}
+
 pub struct LayoutTree<B: EnvyBackend> {
     canvas_size: glam::UVec2,
     animations: HashMap<String, Animation>,
-    playing_animations: HashMap<String, f32>,
+    playing_animations: HashMap<String, PlayingAnimation>,
     root_children: Vec<ObservedNode<B>>,
 }
 
@@ -388,7 +393,17 @@ impl<B: EnvyBackend> LayoutTree<B> {
     pub fn play_animation(&mut self, name: impl AsRef<str>) {
         let name = name.as_ref();
         if self.animations.contains_key(name) {
-            self.playing_animations.insert(name.to_string(), 0.0);
+            self.playing_animations.insert(name.to_string(), PlayingAnimation { progress: 0.0, looping: false });
+        }
+    }
+
+    pub fn play_animation_looping(&mut self, name: impl AsRef<str>) {
+        let name = name.as_ref();
+        if self.animations.contains_key(name) {
+            self.playing_animations.insert(name.to_string(), PlayingAnimation {
+                progress: 0.0,
+                looping: true
+            });
         }
     }
 
@@ -428,8 +443,8 @@ impl<B: EnvyBackend> LayoutTree<B> {
     }
 
     pub fn update_animations(&mut self) {
-        self.playing_animations.retain(|key, progress| {
-            *progress += 1.0;
+        self.playing_animations.retain(|key, state| {
+            state.progress += 1.0;
             if let Some(animation) = self.animations.get(key) {
                 let mut should_keep = false;
                 for node_anim in animation.node_animations.iter() {
@@ -442,12 +457,17 @@ impl<B: EnvyBackend> LayoutTree<B> {
 
                     let mut color = node.color();
                     let mut transform = *node.transform();
-                    should_keep |= !node_anim.animate(*progress, &mut transform, &mut color, node.implementation_mut());
+                    should_keep |= !node_anim.animate(state.progress, &mut transform, &mut color, node.implementation_mut());
                     *node.transform_mut() = transform;
                     *node.color_mut() = color;
                 }
 
-                should_keep
+                if !should_keep && state.looping {
+                    state.progress = -1.0;
+                    true
+                } else {
+                    should_keep
+                }
             } else {
                 false
             }

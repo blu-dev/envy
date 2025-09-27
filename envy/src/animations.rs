@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 
 use crate::{EnvyBackend, ImageNode, Node, NodeTransform};
 
-#[cfg_attr(feature = "asset", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "asset", derive(bincode::Encode, bincode::Decode, serde::Serialize, serde::Deserialize))]
 #[derive(Copy, Clone, PartialEq, Eq)]
 pub enum TransformStep {
     Linear,
@@ -16,6 +16,7 @@ impl TransformStep {
     }
 }
 
+#[cfg_attr(feature = "asset", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone)]
 pub struct AnimationChannel<T> {
     pub start: T,
@@ -266,6 +267,7 @@ impl<T> AnimationChannel<T> {
     }
 }
 
+#[cfg_attr(feature = "asset", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Clone)]
 pub struct AnimationTransform<T> {
     pub end: T,
@@ -465,7 +467,7 @@ const _: () = {
     }
 };
 
-#[cfg_attr(feature = "asset", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "asset", derive(bincode::Encode, bincode::Decode, serde::Serialize, serde::Deserialize))]
 #[derive(Clone)]
 pub struct NodeAnimation {
     pub node_path: String,
@@ -686,7 +688,7 @@ impl NodeAnimation {
     }
 }
 
-#[cfg_attr(feature = "asset", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "asset", derive(bincode::Encode, bincode::Decode, serde::Serialize, serde::Deserialize))]
 #[derive(Clone)]
 pub struct Animation {
     pub node_animations: Vec<NodeAnimation>,

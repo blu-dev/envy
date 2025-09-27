@@ -24,12 +24,12 @@ impl Version {
     }
 
     const fn current() -> Self {
-        Self::new(0, 3, 4)
+        Self::new(0, 3, 5)
     }
 }
 
 mod v010 {
-    use crate::{ImageNodeTemplate, TextNodeTemplate, template::NodeVisibility};
+    use crate::{ImageNodeTemplate, TextNodeTemplate, template::{NodeVisibility, TextAlignment}};
 
     use super::*;
     #[derive(Decode, Encode)]
@@ -357,7 +357,8 @@ mod v010 {
                         font_size: text.font_size,
                         line_height: text.line_height,
                         outline_thickness: 0.0,
-                        outline_color: [255; 4]
+                        outline_color: [255; 4],
+                        alignment: TextAlignment::default(),
                     })
                 }
             };
@@ -1006,7 +1007,7 @@ mod v032 {
 mod v033 {
     use std::io::Cursor;
 
-    use crate::{Animation, ImageNodeTemplate, NodeTransform, SublayoutNodeTemplate, template::NodeVisibility};
+    use crate::{Animation, ImageNodeTemplate, NodeTransform, SublayoutNodeTemplate, template::{NodeVisibility, TextAlignment}};
 
     #[derive(bincode::Encode, bincode::Decode, Clone)]
     struct TextNodeTemplate {
@@ -1024,7 +1025,8 @@ mod v033 {
                 font_size: value.font_size,
                 line_height: value.line_height,
                 outline_color: [255; 4],
-                outline_thickness: 0.0
+                outline_thickness: 0.0,
+                alignment: TextAlignment::default()
             }
         }
     }
@@ -1128,6 +1130,161 @@ mod v033 {
         root
     }
 }
+
+mod v034 {
+    use std::io::Cursor;
+
+    use crate::{Animation, ImageNodeTemplate, NodeTransform, SublayoutNodeTemplate, template::{NodeVisibility, TextAlignment}};
+
+    #[derive(bincode::Encode, bincode::Decode, Clone)]
+    struct TextNodeTemplate {
+        pub font_name: String,
+        pub text: String,
+        pub font_size: f32,
+        pub line_height: f32,
+        pub outline_thickness: f32,
+        pub outline_color: [u8; 4],
+    }
+
+    impl From<TextNodeTemplate> for crate::TextNodeTemplate {
+        fn from(value: TextNodeTemplate) -> Self {
+            Self {
+                font_name: value.font_name,
+                text: value.text,
+                font_size: value.font_size,
+                line_height: value.line_height,
+                outline_thickness: value.outline_thickness,
+                outline_color: value.outline_color,
+                alignment: TextAlignment::default()
+            }
+        }
+    }
+
+    #[derive(bincode::Encode, bincode::Decode, Clone)]
+    enum NodeImplTemplate {
+        Empty,
+        Image(ImageNodeTemplate),
+        Text(TextNodeTemplate),
+        Sublayout(SublayoutNodeTemplate),
+    }
+
+    impl From<NodeImplTemplate> for crate::NodeImplTemplate {
+        fn from(value: NodeImplTemplate) -> Self {
+            use NodeImplTemplate as N;
+            match value {
+                N::Empty => Self::Empty,
+                N::Image(image) => Self::Image(image),
+                N::Text(text) => Self::Text(text.into()),
+                N::Sublayout(sublayout) => Self::Sublayout(sublayout),
+            }
+        }
+    }
+
+    #[derive(Clone, bincode::Encode, bincode::Decode)]
+    struct NodeTemplate {
+        name: String,
+        transform: NodeTransform,
+        color: [u8; 4],
+        visibility: NodeVisibility,
+        children: Vec<NodeTemplate>,
+        implementation: NodeImplTemplate,
+    }
+
+    impl From<NodeTemplate> for crate::NodeTemplate {
+        fn from(value: NodeTemplate) -> Self {
+            Self {
+                name: value.name,
+                transform: value.transform,
+                color: value.color,
+                visibility: value.visibility,
+                children: value.children.into_iter().map(Into::into).collect(),
+                implementation: value.implementation.into(),
+            }
+        }
+    }
+
+    #[derive(bincode::Encode, bincode::Decode)]
+    struct LayoutTemplate {
+        canvas_size: [u32; 2],
+        root_nodes: Vec<NodeTemplate>,
+        animations: Vec<(String, Animation)>,
+    }
+
+    impl From<LayoutTemplate> for crate::LayoutTemplate {
+        fn from(value: LayoutTemplate) -> Self {
+            Self {
+                canvas_size: value.canvas_size,
+                root_nodes: value.root_nodes.into_iter().map(Into::into).collect(),
+                animations: value
+                    .animations
+                    .into_iter()
+                    .map(|(name, anim)| (name, anim.into()))
+                    .collect(),
+            }
+        }
+    }
+
+    #[derive(bincode::Decode, bincode::Encode)]
+    struct Asset {
+        images: Vec<(String, Vec<u8>)>,
+        fonts: Vec<(String, Vec<u8>)>,
+        templates: Vec<(String, LayoutTemplate)>,
+        root_template: LayoutTemplate,
+    }
+
+    pub(super) fn deserialize<B: crate::EnvyBackend, A: super::EnvyAssetProvider>(
+        backend: &mut A,
+        reader: &mut Cursor<&[u8]>,
+    ) -> crate::LayoutRoot<B> {
+        let asset: Asset =
+            bincode::decode_from_std_read(reader, bincode::config::standard()).unwrap();
+
+        let mut root_template = crate::LayoutTemplate::from(asset.root_template);
+
+        let mut templates = asset
+            .templates
+            .into_iter()
+            .map(|(name, template)| (name, crate::LayoutTemplate::from(template)))
+            .collect::<Vec<_>>();
+
+        root_template.animations.iter_mut().for_each(|(_, anim)| anim.node_animations.iter_mut().for_each(|anim| {
+            #[cfg(target_os = "windows")]
+            {
+                anim.node_path = anim.node_path.replace("/", "\\");
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                anim.node_path = anim.node_path.replace("\\", "/");
+            }
+        }));
+
+        templates.iter_mut().for_each(|(_, template)| {
+            template.animations.iter_mut().for_each(|(_, anim)| anim.node_animations.iter_mut().for_each(|anim| {
+                #[cfg(target_os = "windows")]
+                {
+                    anim.node_path = anim.node_path.replace("/", "\\");
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    anim.node_path = anim.node_path.replace("\\", "/");
+                }
+            }));
+        });
+
+        let root = crate::LayoutRoot::from_root_template(root_template, templates);
+
+        for (image, bytes) in asset.images {
+            backend.load_image_bytes_with_name(image, bytes);
+        }
+
+        for (font, bytes) in asset.fonts {
+            backend.load_font_bytes_with_name(font, bytes);
+        }
+
+        root
+    }
+}
+
 #[derive(Decode, Encode)]
 struct Asset {
     images: Vec<(String, Vec<u8>)>,
@@ -1236,12 +1393,38 @@ pub fn deserialize<B: EnvyBackend, A: EnvyAssetProvider>(
         return v032::deserialize(asset_provider, &mut reader);
     } else if version == Version::new(0, 3, 3) {
         return v033::deserialize(asset_provider, &mut reader);
+    } else if version == Version::new(0, 3, 4) {
+        return v034::deserialize(asset_provider, &mut reader);
     }
 
     assert_eq!(version, Version::current());
 
-    let asset: Asset =
+    let mut asset: Asset =
         bincode::decode_from_std_read(&mut reader, bincode::config::standard()).unwrap();
+
+    asset.root_template.animations.iter_mut().for_each(|(_, anim)| anim.node_animations.iter_mut().for_each(|anim| {
+        #[cfg(target_os = "windows")]
+        {
+            anim.node_path = anim.node_path.replace("/", "\\");
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            anim.node_path = anim.node_path.replace("\\", "/");
+        }
+    }));
+
+    asset.templates.iter_mut().for_each(|(_, template)| {
+        template.animations.iter_mut().for_each(|(_, anim)| anim.node_animations.iter_mut().for_each(|anim| {
+            #[cfg(target_os = "windows")]
+            {
+                anim.node_path = anim.node_path.replace("/", "\\");
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                anim.node_path = anim.node_path.replace("\\", "/");
+            }
+        }));
+    });
 
     let root = crate::LayoutRoot::from_root_template(asset.root_template, asset.templates);
 

@@ -6,11 +6,10 @@ use bitvec::vec::BitVec;
 use bytemuck::{Pod, Zeroable};
 use camino::Utf8Path;
 use cosmic_text::{
-    fontdb::{FaceInfo, Source},
-    CacheKey, Command, Family, FontSystem, Metrics, SwashCache,
+    Align, CacheKey, Command, Family, FontSystem, Metrics, SwashCache, fontdb::{FaceInfo, Source}
 };
 use envy::{
-    DrawTextureArgs, DrawUniform, EnvyBackend, ImageScalingMode, PreparedGlyph, TextLayoutArgs, TextureRequestArgs, ViewUniform, asset::EnvyAssetProvider
+    DrawTextureArgs, DrawUniform, EnvyBackend, ImageScalingMode, PreparedGlyph, TextAlignment, TextLayoutArgs, TextureRequestArgs, ViewUniform, asset::EnvyAssetProvider
 };
 use glam::{Vec3, Vec4};
 use image::{codecs::png::PngEncoder, ImageEncoder};
@@ -666,7 +665,13 @@ impl WgpuFontBackend {
                 ..cosmic_text::Attrs::new()
             },
             cosmic_text::Shaping::Basic,
-            Some(cosmic_text::Align::Center),
+            Some(match args.alignment {
+                TextAlignment::Left => Align::Left,
+                TextAlignment::Center => Align::Center,
+                TextAlignment::Right => Align::Right,
+                TextAlignment::Justify => Align::Justified,
+                TextAlignment::End => Align::End
+            }),
         );
 
         let mut glyphs = vec![];

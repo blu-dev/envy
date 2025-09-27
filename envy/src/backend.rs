@@ -1,4 +1,4 @@
-use crate::{DrawUniform, EnvyMaybeSendSync, ImageScalingMode};
+use crate::{DrawUniform, EnvyMaybeSendSync, ImageScalingMode, template::TextAlignment};
 
 pub struct TextureRequestArgs {
     pub scaling_x: ImageScalingMode,
@@ -24,6 +24,9 @@ pub struct TextLayoutArgs<'a, R: EnvyBackend> {
 
     /// Thickness of the outline
     pub outline_thickness: f32,
+
+    /// Alignment of the text
+    pub alignment: TextAlignment,
 }
 
 /// Glyph information prepared by the render backend
